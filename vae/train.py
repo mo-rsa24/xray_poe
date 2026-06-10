@@ -81,7 +81,12 @@ def _wandb_log_images(
             axes[1, i].axis("off")
         fig.suptitle(f"step {step}", fontsize=10, y=1.01)
         fig.tight_layout()
-        wb.log({tag: wandb.Image(fig)}, step=step)
+        import io
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=90, bbox_inches="tight")
+        buf.seek(0)
+        from PIL import Image as _PILImage
+        wb.log({tag: wandb.Image(_PILImage.open(buf))}, step=step)
         plt.close(fig)
     except Exception as e:
         print(f"[warn] W&B image log failed: {e}")
