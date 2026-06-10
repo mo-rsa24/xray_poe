@@ -68,6 +68,7 @@ if [ "$MODE" = "overfit" ]; then
         --steps 500 \
         --lr 1e-4 \
         --log-every 50 \
+        --log-images-every 100 \
         --figure "figures/vae_overfit_real.png" \
         --wandb-project "${WANDB_PROJECT:-paper3-vae}" \
         2>&1 | tee "$LOG"
