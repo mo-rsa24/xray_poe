@@ -88,7 +88,12 @@ def make_splits(
                 continue
             fname = row["Image Index"].strip()
             fpath = str(img_dir / fname)
-            if not Path(fpath).exists():
+            p = Path(fpath)
+            # Skip missing or zero-byte/corrupt PNGs. The NIH release plus
+            # re-downloads leave a handful of truncated files (currently 14)
+            # that would otherwise crash the image loader; count is unstable
+            # across pulls, so filter by size rather than a hardcoded list.
+            if not p.exists() or p.stat().st_size == 0:
                 continue
             labels = set(row["Finding Labels"].split("|"))
             has_cardio = "Cardiomegaly" in labels
