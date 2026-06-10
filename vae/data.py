@@ -144,6 +144,53 @@ def make_splits(
     return train_paths, val_paths
 
 
+def make_monitor_batch(
+    csv_path: str,
+    image_dir: str,
+    res: int = 512,
+    seed: int = 0,
+) -> tuple[list[str], list[str]]:
+    """Return (paths, labels) for one representative image per pathology group.
+
+    Picks one image from each of: Normal, Cardiomegaly, Effusion, Both, Other.
+    Used as a fixed diagnostic batch logged to W&B throughout training so the
+    same images are compared at every checkpoint.
+    """
+    groups: dict[str, list[str]] = {"Normal": [], "Cardiomegaly": [], "Effusion": [], "Both (Cardio+Effusion)": [], "Other": []}
+    img_dir = Path(image_dir)
+
+    with open(csv_path, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if row.get("View Position", "").strip() not in ("PA", "AP"):
+                continue
+            fname = row["Image Index"].strip()
+            p = img_dir / fname
+            if not p.exists() or p.stat().st_size == 0:
+                continue
+            labels = set(row["Finding Labels"].split("|"))
+            has_cardio = "Cardiomegaly" in labels
+            has_effusion = "Effusion" in labels
+            if has_cardio and has_effusion:
+                groups["Both (Cardio+Effusion)"].append(str(p))
+            elif has_cardio:
+                groups["Cardiomegaly"].append(str(p))
+            elif has_effusion:
+                groups["Effusion"].append(str(p))
+            elif labels == {"No Finding"}:
+                groups["Normal"].append(str(p))
+            else:
+                groups["Other"].append(str(p))
+
+    rng = random.Random(seed)
+    paths, label_names = [], []
+    for label, group_paths in groups.items():
+        if group_paths:
+            paths.append(rng.choice(group_paths))
+            label_names.append(label)
+    return paths, label_names
+
+
 class RealCXRDataset(Dataset):
     """NIH ChestX-ray14 PNGs → (1, res, res) float32 in [-1, 1].
 

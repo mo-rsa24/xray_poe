@@ -34,7 +34,7 @@ import torch
 import torch.nn as nn
 
 from .config import VAEConfig
-from .data import fixed_overfit_batch, make_splits, noise_loader, real_cxr_loader
+from .data import fixed_overfit_batch, make_monitor_batch, make_splits, noise_loader, real_cxr_loader
 from .losses import LossTerms, kl_divergence, reconstruction_loss
 from .model import VAE
 
@@ -59,18 +59,30 @@ def _wandb_log(wb, metrics: dict, step: int) -> None:
         wb.log(metrics, step=step)
 
 
-def _wandb_log_images(wb, tag: str, x: torch.Tensor, recon: torch.Tensor, step: int, n: int = 4) -> None:
+def _wandb_log_images(
+    wb, tag: str, x: torch.Tensor, recon: torch.Tensor, step: int,
+    n: int = 4, labels: list[str] | None = None,
+) -> None:
     if wb is None:
         return
     try:
         import wandb
+        import matplotlib.pyplot as plt
         n = min(n, x.shape[0])
         to_img = lambda t: ((t[0, 0].detach().cpu().float() + 1) / 2).clamp(0, 1).numpy()
-        panels = []
+        fig, axes = plt.subplots(2, n, figsize=(3 * n, 6), squeeze=False)
         for i in range(n):
-            panels.append(wandb.Image(to_img(x[i:i+1]), caption=f"input {i}"))
-            panels.append(wandb.Image(to_img(recon[i:i+1]), caption=f"recon {i}"))
-        wb.log({tag: panels}, step=step)
+            lbl = labels[i] if labels and i < len(labels) else str(i)
+            axes[0, i].imshow(to_img(x[i:i+1]), cmap="gray", vmin=0, vmax=1)
+            axes[0, i].set_title(f"Input\n{lbl}", fontsize=8)
+            axes[0, i].axis("off")
+            axes[1, i].imshow(to_img(recon[i:i+1]), cmap="gray", vmin=0, vmax=1)
+            axes[1, i].set_title(f"Recon\n{lbl}", fontsize=8)
+            axes[1, i].axis("off")
+        fig.suptitle(f"step {step}", fontsize=10, y=1.01)
+        fig.tight_layout()
+        wb.log({tag: wandb.Image(fig)}, step=step)
+        plt.close(fig)
     except Exception as e:
         print(f"[warn] W&B image log failed: {e}")
 
@@ -201,6 +213,21 @@ def train(args) -> None:
     wb_config = vars(args)
     wb = _wandb_init(args.wandb_project, wb_config) if args.wandb_project else None
 
+    # ---- fixed monitor batch (one image per pathology class for W&B grids) --
+    monitor_x: torch.Tensor | None = None
+    monitor_labels: list[str] | None = None
+    if args.data == "real" and args.csv:
+        try:
+            mon_paths, monitor_labels = make_monitor_batch(args.csv, args.data_dir, res=args.res)
+            from .data import RealCXRDataset
+            import torch.utils.data as _tud
+            _mon_ds = RealCXRDataset(mon_paths, res=args.res)
+            _mon_dl = _tud.DataLoader(_mon_ds, batch_size=len(mon_paths), shuffle=False)
+            monitor_x = next(iter(_mon_dl)).to(device)
+            print(f"[monitor] {len(mon_paths)} fixed images: {monitor_labels}")
+        except Exception as e:
+            print(f"[warn] monitor batch failed ({e}); image logs will be unlabelled")
+
     # ---- data source -------------------------------------------------------
     val_loader = None  # set for real-data runs
 
@@ -311,9 +338,11 @@ def train(args) -> None:
         # ---- recon images to W&B ------------------------------------------
         if args.log_images_every and step % args.log_images_every == 0:
             model.eval()
+            log_x = monitor_x if monitor_x is not None else x
             with torch.no_grad():
-                recon_vis = model.reconstruct(x)
-            _wandb_log_images(wb, "recon/train", x, recon_vis, step)
+                recon_vis = model.reconstruct(log_x)
+            _wandb_log_images(wb, "recon/train", log_x, recon_vis, step,
+                              n=log_x.shape[0], labels=monitor_labels)
             model.train()
 
         # ---- latent manifold (val set) ------------------------------------
@@ -342,7 +371,7 @@ def train(args) -> None:
             recon_final = model.reconstruct(get_batch())
         _save_figure(get_batch(), recon_final, args.figure)
         _wandb_log_images(wb, "recon/overfit_final", get_batch(), recon_final,
-                          step=start_step + args.steps)
+                          step=start_step + args.steps, labels=monitor_labels)
 
     # final checkpoint
     if args.ckpt:
