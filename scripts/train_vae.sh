@@ -123,7 +123,7 @@ log "log → $TRAIN_LOG"
 log "W&B project → ${WANDB_PROJ}"
 log "steps=${STEPS}  batch=${BATCH}  lr=${LR}  res=${RES}"
 
-EXTRA_FLAGS=""
+EXTRA_FLAGS="--fp32"
 [ "$GRAD_CKPT" = "true" ] && EXTRA_FLAGS="$EXTRA_FLAGS --grad-checkpoint"
 [ "$EMA"       = "true" ] && EXTRA_FLAGS="$EXTRA_FLAGS --ema --ema-decay $EMA_DECAY"
 

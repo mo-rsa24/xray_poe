@@ -19,7 +19,7 @@ grad_checkpoint: true       # measured: 7.4 GB/img → fits 48 GB at b≥4; b≥
 # steps: measured 50 epochs over 112k images ≈ steps below at the profiled img/s.
 # Cap the run and gate on SSIM/LPIPS; stop when the recon gate trips, not at steps.
 steps: 150000
-batch: 8                    # update to measured max-batch from 00-profile sweep
+batch: 4                    # fp32 stable: bf16 diverged (MS-SSIM instability); fp32 batch 4 ≈ 57 GB fits A100 80 GB
 lr: 1.0e-4
 weight_decay: 1.0e-2
 ema: true
