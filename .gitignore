@@ -1,0 +1,28 @@
+# large data & checkpoints — never commit these
+data/
+ckpts/
+logs/
+figures/
+runs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+*.so
+
+# Jupyter
+.ipynb_checkpoints/
+
+# env / secrets — never commit
+.env
+*.env
+kaggle.json
+wandb/
+
+# OS
+.DS_Store
+Thumbs.db

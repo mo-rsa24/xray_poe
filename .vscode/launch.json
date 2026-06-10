@@ -1,0 +1,66 @@
+{
+  // Debug/run configs for the VAE scope. Entrypoints live in the `vae` package
+  // (plans/vae/plans/04). Created by plan 03-local-env-setup.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "VAE: sanity",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "vae.sanity",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "VAE: overfit",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "vae.train",
+      "args": ["--overfit", "--batch", "8", "--steps", "500"],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "VAE: train (noise)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "vae.train",
+      "args": ["--data", "noise", "--res", "512", "--steps", "2000"],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "VAE: profile",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "vae.profile",
+      "args": ["--res", "512", "--batch", "8", "--precision", "bf16"],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "VAE: budget",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "vae.budget",
+      "args": ["--img-s", "120", "--epochs", "150", "--n", "50000", "--rate", "0.79"],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Pytest",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["tests/", "-v"],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

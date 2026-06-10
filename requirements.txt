@@ -1,0 +1,24 @@
+# VAE codec — pinned for reproducibility on the rented GPU (RunPod).
+# Locally these are already provided by the `jaxstack` micromamba env; this file
+# documents the set so the same stack can be recreated on rented infra.
+#
+# torch is the CUDA build (cu124). On RunPod install the matching CUDA wheel:
+#   pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+torch==2.5.1
+torchvision==0.20.1
+monai>=1.3,<2
+pytorch-msssim>=1.0
+lpips>=0.1.4
+einops>=0.8
+PyYAML>=6
+numpy>=1.26
+matplotlib>=3.8
+pytest>=8
+
+# experiment tracking
+wandb>=0.17
+
+# data acquisition — NIH ChestX-ray14 + VinDr-CXR pulls (scripts/download_*.sh)
+kaggle>=1.6
+pandas>=2.0
+pillow>=10

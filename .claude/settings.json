@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m pip install --no-input \"monai>=1.3\" pytorch-msssim lpips)",
+      "Bash(python3 -)",
+      "Bash(python3 -m vae.sanity)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(python3 -m pytest tests/ -v)",
+      "Bash(python3 -m pytest tests/ -q)",
+      "Bash(python3 -m vae.budget*)",
+      "Bash(python3 -m vae.profile*)",
+      "Bash(pkill -f \"vae.train\")",
+      "Bash(nvidia-smi*)",
+      "Bash(awk*)",
+      "WebSearch",
+      "mcp__todoist-mcp__fetch-object",
+      "mcp__todoist-mcp__find-tasks",
+      "mcp__todoist-mcp__complete-tasks",
+      "mcp__todoist-mcp__add-tasks",
+      "Bash(chmod +x scripts/setup_pod.sh scripts/train_vae.sh)"
+    ]
+  }
+}
