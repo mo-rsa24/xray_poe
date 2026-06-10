@@ -13,7 +13,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-PYTHON="${VAE_PYTHON:-python}"
+PYTHON="${VAE_PYTHON:-python} -u"
 STAMP="$(date '+%Y%m%d_%H%M%S')"
 mkdir -p runs ckpts figures logs
 
@@ -108,6 +108,7 @@ EMA=$(parse_yaml ema "$CONFIG_FILE")
 EMA_DECAY=$(parse_yaml ema_decay "$CONFIG_FILE")
 VAL_FRAC=$(parse_yaml val_fraction "$CONFIG_FILE")
 NUM_WORKERS=$(parse_yaml num_workers "$CONFIG_FILE")
+MAX_IMAGES=$(parse_yaml max_images "$CONFIG_FILE")
 CKPT_DIR=$(parse_yaml ckpt_dir "$CONFIG_FILE")
 CKPT_EVERY=$(parse_yaml ckpt_every "$CONFIG_FILE")
 CKPT_FINAL=$(parse_yaml ckpt "$CONFIG_FILE")
@@ -136,6 +137,7 @@ $PYTHON -m vae.train \
     --data-dir "$DATA_DIR" \
     --csv "$CSV" \
     --val-fraction "$VAL_FRAC" \
+    ${MAX_IMAGES:+--max-images "$MAX_IMAGES"} \
     --num-workers "$NUM_WORKERS" \
     --res "$RES" \
     --batch "$BATCH" \

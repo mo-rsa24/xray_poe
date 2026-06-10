@@ -8,6 +8,7 @@ data: real
 data_dir: data/nih/images
 csv: data/nih/Data_Entry_2017.csv
 val_fraction: 0.05          # 5 % held out for monitoring; not used for gating
+max_images: 20000           # priority-stratified cap: both+cardio kept in full, rest proportional
 num_workers: 8              # tune to pod vCPU count (RunPod A100 usually 16+)
 
 # ── architecture ────────────────────────────────────────────────────────────

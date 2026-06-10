@@ -220,7 +220,8 @@ def train(args) -> None:
 
     elif args.data == "real":
         train_paths, val_paths = make_splits(args.csv, args.data_dir,
-                                              val_fraction=args.val_fraction)
+                                              val_fraction=args.val_fraction,
+                                              max_train=args.max_images)
         print(f"[real] train={len(train_paths)} val={len(val_paths)} images")
         train_dl = real_cxr_loader(train_paths, res=args.res, batch=args.batch,
                                     num_workers=args.num_workers, split="train")
@@ -369,6 +370,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--csv", default="data/nih/Data_Entry_2017.csv",
                    help="NIH Data_Entry_2017.csv with labels + view positions")
     p.add_argument("--val-fraction", type=float, default=0.05)
+    p.add_argument("--max-images", type=int, default=None,
+                   help="cap training set size with priority sampling (both+cardio kept in full)")
     p.add_argument("--num-workers", type=int, default=4)
 
     # architecture / hardware

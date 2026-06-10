@@ -64,6 +64,7 @@ def make_splits(
     val_fraction: float = 0.05,
     seed: int = 42,
     frontal_only: bool = True,
+    max_train: int | None = None,
 ) -> tuple[list[str], list[str]]:
     """Return (train_paths, val_paths) from Data_Entry_2017.csv.
 
@@ -71,6 +72,11 @@ def make_splits(
     because they look structurally different and the VAE trains on the majority.
     The split is stratified by the four-group label so each split has a
     representative mix.
+
+    max_train caps the training set with priority sampling: the two PoE-critical
+    groups (both=cardio+effusion co-morbid, cardio) are kept in full; the
+    remaining budget is split proportionally across effusion/normal/other.
+    This preserves the rare signal needed for downstream LDM + PoE conditioning.
     """
     img_dir = Path(image_dir)
     groups: dict[str, list[str]] = {"normal": [], "cardio": [], "effusion": [], "both": [], "other": []}
@@ -99,12 +105,34 @@ def make_splits(
                 groups["other"].append(fpath)
 
     rng = random.Random(seed)
-    train_paths, val_paths = [], []
-    for paths in groups.values():
+    train_groups: dict[str, list[str]] = {}
+    val_paths: list[str] = []
+    for name, paths in groups.items():
         rng.shuffle(paths)
         n_val = max(1, int(len(paths) * val_fraction)) if paths else 0
         val_paths.extend(paths[:n_val])
-        train_paths.extend(paths[n_val:])
+        train_groups[name] = paths[n_val:]
+
+    if max_train is not None:
+        # Priority groups kept in full — critical for PoE conditioning quality.
+        # Remaining budget split proportionally across normal / effusion / other.
+        priority = ("both", "cardio")
+        capped: dict[str, list[str]] = {}
+        budget = max_train
+        for name in priority:
+            capped[name] = train_groups[name]
+            budget -= len(train_groups[name])
+        budget = max(budget, 0)
+        rest = {k: v for k, v in train_groups.items() if k not in priority}
+        total_rest = sum(len(v) for v in rest.values())
+        for name, paths in rest.items():
+            n = int(budget * len(paths) / total_rest) if total_rest > 0 else 0
+            capped[name] = paths[:n]
+        train_groups = capped
+
+    train_paths: list[str] = []
+    for paths in train_groups.values():
+        train_paths.extend(paths)
 
     rng.shuffle(train_paths)
     rng.shuffle(val_paths)
