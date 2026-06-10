@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import csv
 import random
+import warnings
 from pathlib import Path
 from typing import Literal
 
@@ -206,13 +207,28 @@ class RealCXRDataset(Dataset):
     def __len__(self) -> int:
         return len(self.paths)
 
-    def __getitem__(self, idx: int) -> torch.Tensor:
-        img = Image.open(self.paths[idx]).convert("L")  # grayscale
+    def _load(self, idx: int) -> torch.Tensor:
+        img = Image.open(self.paths[idx]).convert("L")  # grayscale (forces decode)
         if img.size != (self.res, self.res):
             img = img.resize((self.res, self.res), Image.LANCZOS)
         t = torch.from_numpy(__import__("numpy").array(img, dtype="float32"))
         t = t / 127.5 - 1.0          # [0,255] → [-1,1]
         return t.unsqueeze(0)         # (1, res, res)
+
+    def __getitem__(self, idx: int) -> torch.Tensor:
+        # A truncated/corrupt PNG raises inside the decode and would otherwise
+        # kill the DataLoader worker mid-epoch. Skip forward to the next valid
+        # image (wrapping around) so a few bad files never crash training.
+        n = len(self.paths)
+        for offset in range(n):
+            j = (idx + offset) % n
+            try:
+                return self._load(j)
+            except Exception as e:
+                if offset == 0:
+                    warnings.warn(f"skipping corrupt image {self.paths[j]}: {e}")
+                continue
+        raise RuntimeError("no decodable images in dataset")
 
 
 def real_cxr_loader(
