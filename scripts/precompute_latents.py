@@ -168,7 +168,7 @@ def encode_split(
         for i, (path, label) in enumerate(valid_batch):
             stem = Path(path).stem
             out_path = out_dir / f"{stem}.pt"
-            torch.save({"z": z[i], "label": label}, out_path)
+            torch.save({"z": z[i].clone(), "label": label}, out_path)
             counts[label_to_name[label]] += 1
 
     return counts
@@ -185,7 +185,7 @@ def main() -> None:
 
     vae_model = VAE(vae_cfg).to(device)
     ckpt = torch.load(args.vae_ckpt, map_location=device, weights_only=False)
-    vae_model.load_state_dict(ckpt.get("model_state", ckpt))
+    vae_model.load_state_dict(ckpt.get("model", ckpt.get("model_state", ckpt)))
     vae_model.eval()
     for p in vae_model.parameters():
         p.requires_grad_(False)
