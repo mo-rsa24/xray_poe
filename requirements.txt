@@ -17,6 +17,8 @@ pytest>=8
 
 # experiment tracking
 wandb>=0.17
+safetensors>=0.4
+diffusers>=0.27
 
 # data acquisition — NIH ChestX-ray14 + VinDr-CXR pulls (scripts/download_*.sh)
 kaggle>=1.6

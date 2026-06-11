@@ -1,0 +1,19 @@
+# LDM full training config — all hyperparameters locked here
+lr: 1.0e-4
+batch_size: 4
+grad_accum: 4
+model_channels: 128
+num_train_timesteps: 1000
+cfg_dropout_p: 0.15
+bf16: true
+max_steps: 100000
+ckpt_every: 10000
+seed: 42
+
+# Class-balance overrides
+effusion_weight: 2.0
+no_finding_cap: 4000
+
+wandb:
+  project: paper3-ldm
+  run_name_template: "ldm_{tag}_{cfg_p}_{seed}_{date}"

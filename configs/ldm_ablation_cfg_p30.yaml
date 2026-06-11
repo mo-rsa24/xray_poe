@@ -1,0 +1,2 @@
+_base_: ldm_full.yaml
+cfg_dropout_p: 0.30
