@@ -361,7 +361,7 @@ def main() -> None:
 
         def vae_encode_fn(x: torch.Tensor) -> torch.Tensor:
             with torch.no_grad():
-                return vae_model.encode(x).latent_dist.sample()
+                return vae_model.encode(x)
 
     else:
         raise ValueError(

@@ -1,5 +1,5 @@
 # large data & checkpoints — never commit these
-data/
+/data/
 ckpts/
 logs/
 figures/

@@ -130,9 +130,10 @@ class LDM(nn.Module):
         label_input = label.clone()
         label_input[drop_mask] = self.null_token_idx
 
-        # Forward through UNet
-        context = self.class_embed(label_input).unsqueeze(1)  # (B, 1, 512)
-        eps_pred = self.unet(z_t, t, context)
+        # Forward through UNet. LDMUNet owns the class/null embedding and expects
+        # integer label indices (see src/models/ldm_unet.py and cfg_single); pass
+        # the labels directly rather than a pre-computed context tensor.
+        eps_pred = self.unet(z_t, t, label_input)
 
         return torch.nn.functional.mse_loss(eps_pred, eps)
 

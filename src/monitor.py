@@ -60,7 +60,7 @@ class MonitorBatch:
         self._noise: list[torch.Tensor] = []
         for seed in seeds:
             for cls_idx in MONITOR_CLASSES:
-                g = torch.Generator().manual_seed(seed + cls_idx * 1000)
+                g = torch.Generator(device=self.device).manual_seed(seed + cls_idx * 1000)
                 z = torch.randn(1, C, H, W, generator=g, device=self.device)
                 self._noise.append(z)
 
