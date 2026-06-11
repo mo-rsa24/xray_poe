@@ -25,7 +25,7 @@ These numbers come directly from the code and config — no estimation involved.
 
 **Dataset**: 112,120 NIH frontal PNGs at 512×512, filtered to 3 classes (Normal, Cardiomegaly, Effusion). Precomputed latents are stored as `(4, 128, 128)` float32 tensors — the VAE is frozen out of the LDM training loop entirely.
 
-**Pipeline count**: the paper needs **2 independent LDM runs** (one cardiomegaly expert, one effusion expert), plus 2 ablation configs for the CFG dropout sweep. Preprocessing is a one-time cost shared across all four.
+**Pipeline count**: the paper needs **1 conditional LDM**, trained jointly on all three classes (Normal, Cardiomegaly, Effusion) with CFG dropout. At inference, `cfg_compose` queries this single model three times per denoising step — once per condition — and combines the scores via PoE: `ε_composed = ε_anchor + w*(ε_cardio − ε_anchor) + w*(ε_effusion − ε_anchor)`. There are no separate per-disease models. The optional ablation configs (`cfg_p00`, `cfg_p30`) are re-runs of this same single model with different dropout rates.
 
 ---
 
@@ -183,42 +183,42 @@ The config sets `max_steps: 100,000` but the kill criterion (`loss > 2× loss_at
 ## Full Pipeline Cost
 
 Each scenario below includes:
-- Preprocessing: 1× precompute + scale factor (shared)
-- Training: 2 LDM experts (`cardiomegaly` + `effusion`) at the stated steps
+- Preprocessing: 1× precompute + scale factor (shared across all runs)
+- Training: 1 conditional LDM (3 classes jointly) at the stated steps
 - Buffer: 0.5 h for pod setup, teardown, and checkpoint retrieval
 - Contingency: 1.2× applied to the training component only (preprocessing variance is low)
 
-Ablation configs (`ldm_ablation_cfg_p00`, `ldm_ablation_cfg_p30`) are included in Scenario C only.
+Ablation configs (`ldm_ablation_cfg_p00`, `ldm_ablation_cfg_p30`) re-run the same model with different `cfg_dropout_p`; they are included in Scenario C only.
 
-### Scenario A — Pipeline Validation (50k steps, 2 LDMs)
+### Scenario A — Pipeline Validation (50k steps, 1 LDM)
 
 Use this to confirm the training loop works end-to-end, validate CFG output quality, and decide whether to continue to convergence. Acceptable if budget is tight and you can visually assess the W&B grids to judge whether the model is learning.
 
-| GPU | Preprocess | Training (×2) | Total | **Pessimistic** | **Central** | **Optimistic** |
+| GPU | Preprocess | Training (×1) | Total | **Pessimistic** | **Central** | **Optimistic** |
 |-----|-----------|--------------|-------|----------------|------------|----------------|
-| A10G 24 GB | 1.6 h | 50k / 1.0 s × 2 = 27.8 h | **~30 h** | $54 | **$44** | $34 |
-| A40  48 GB | 1.3 h | 50k / 1.2 s × 2 = 23.1 h | **~25 h** | $45 | **$37** | $29 |
-| A100 80 GB | 0.7 h | 50k / 2.5 s × 2 = 11.1 h | **~12 h** | $22 | **$18** | $14 |
+| A10G 24 GB | 1.6 h | 50k / 1.0 s = 13.9 h | **~16 h** | $29 | **$24** | $18 |
+| A40  48 GB | 1.3 h | 50k / 1.2 s = 11.6 h | **~13 h** | $24 | **$20** | $15 |
+| A100 80 GB | 0.7 h | 50k / 2.5 s =  5.6 h | **~7 h**  | $13 | **$10** | $8  |
 
-### Scenario B — Convergence Run (100k steps, 2 LDMs)
+### Scenario B — Convergence Run (100k steps, 1 LDM)
 
 Required before running Exp5–8 (marginals gate, composition experiments). This is the minimum viable run for a complete paper result.
 
-| GPU | Preprocess | Training (×2) | Total | **Pessimistic** | **Central** | **Optimistic** |
+| GPU | Preprocess | Training (×1) | Total | **Pessimistic** | **Central** | **Optimistic** |
 |-----|-----------|--------------|-------|----------------|------------|----------------|
-| A10G 24 GB | 1.6 h | 100k / 1.0 s × 2 = 55.6 h | **~57 h** | $102 | **$85** | $66 |
-| A40  48 GB | 1.3 h | 100k / 1.2 s × 2 = 46.3 h | **~48 h** | $86 | **$72** | $55 |
-| A100 80 GB | 0.7 h | 100k / 2.5 s × 2 = 22.2 h | **~23 h** | $42 | **$35** | $27 |
+| A10G 24 GB | 1.6 h | 100k / 1.0 s = 27.8 h | **~30 h** | $54 | **$44** | $34 |
+| A40  48 GB | 1.3 h | 100k / 1.2 s = 23.1 h | **~25 h** | $45 | **$37** | $29 |
+| A100 80 GB | 0.7 h | 100k / 2.5 s = 11.1 h | **~12 h** | $22 | **$18** | $14 |
 
-### Scenario C — Full Experiment Grid (100k steps, 2 LDMs + 2 ablations)
+### Scenario C — Full Experiment Grid (100k steps, 1 LDM + 2 ablations)
 
-Adds the two CFG-dropout ablation runs needed for Exp6/7. Preprocessing and scale factor are still paid once.
+Adds the two CFG-dropout ablation runs needed for Exp6/7. Preprocessing is still paid once.
 
-| GPU | Preprocess | Training (×4) | Total | **Pessimistic** | **Central** | **Optimistic** |
+| GPU | Preprocess | Training (×3) | Total | **Pessimistic** | **Central** | **Optimistic** |
 |-----|-----------|--------------|-------|----------------|------------|----------------|
-| A10G 24 GB | 1.6 h | 100k / 1.0 s × 4 = 111 h | **~113 h** | $201 | **$167** | $130 |
-| A40  48 GB | 1.3 h | 100k / 1.2 s × 4 = 92.6 h | **~94 h** | $169 | **$141** | $109 |
-| A100 80 GB | 0.7 h | 100k / 2.5 s × 4 = 44.4 h | **~46 h** | $82 | **$68** | $53 |
+| A10G 24 GB | 1.6 h | 100k / 1.0 s × 3 = 83.3 h | **~85 h** | $151 | **$126** | $98 |
+| A40  48 GB | 1.3 h | 100k / 1.2 s × 3 = 69.4 h | **~71 h** | $127 | **$106** | $82 |
+| A100 80 GB | 0.7 h | 100k / 2.5 s × 3 = 33.3 h | **~35 h** | $62  | **$51**  | $40 |
 
 ---
 
@@ -251,14 +251,14 @@ For example, if `time` reports `40s` for 100 steps → 2.5 steps/sec → use the
 
 | Priority | Choice | Reasoning |
 |----------|--------|-----------|
-| Minimum for paper | **A100 80 GB, Scenario B** | ~$35–42. Two converged LDM experts in ~23 h. |
-| Budget-conscious | **A40 48 GB, Scenario B** | ~$72–86. Same result, ~2× longer wall-clock. |
-| Full grid in one shot | **A100 80 GB, Scenario C** | ~$68–82. All four configs sequential; ~46 h total. |
-| Fastest turnaround | **H100 80 GB, Scenario B** | ~$13–16. ~7 h total including preprocessing. |
+| Minimum for paper | **A100 80 GB, Scenario B** | ~$14–22. One converged LDM in ~12 h. |
+| Budget-conscious | **A40 48 GB, Scenario B** | ~$29–45. Same result, ~2× longer wall-clock. |
+| Full grid in one shot | **A100 80 GB, Scenario C** | ~$40–62. All three configs sequential; ~35 h total. |
+| Fastest turnaround | **H100 80 GB, Scenario B** | ~$5–8. ~4 h total including preprocessing. |
 
-**Avoid A10G for Scenario C** — 113 h on a preemptible pod is high-risk without checkpointing paranoia.
+**Avoid A10G for Scenario C** — 85 h on a preemptible pod is high-risk without paranoid checkpointing.
 
-**Parallel option for Scenario C:** split into two simultaneous Scenario B pods (one for the two main LDMs, one for the two ablations). Same total cost, half the calendar time.
+**Parallel option for Scenario C:** run the main LDM and the two ablations on two simultaneous pods. Same total cost, ~half the calendar time.
 
 ---
 
