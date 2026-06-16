@@ -1,7 +1,8 @@
 # LDM full training config — all hyperparameters locked here
 lr: 1.0e-4
-batch_size: 4
-grad_accum: 4
+lr_warmup_steps: 500
+batch_size: 8
+grad_accum: 2
 model_channels: 128
 num_train_timesteps: 1000
 cfg_dropout_p: 0.15

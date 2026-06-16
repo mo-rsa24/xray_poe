@@ -4,7 +4,9 @@ ckpts/
 logs/
 figures/
 runs/
-
+plans/
+briefs/
+paper/
 # Python
 __pycache__/
 *.py[cod]

@@ -51,7 +51,7 @@ The mechanism is sharper than that abstract condition, though. Because we train 
 - **Independent pair:** "c₁ alone" looks like "c₁ with c₂." The bias vanishes → product matches the joint → **PoE works.**
 - **Correlated pair:** the shared cause makes "c₁ alone" systematically *milder* than "c₁ with c₂." Both factors miss the severe-coupled appearance → the product can't recover it → **PoE fails.**
 
-> **Correlation is what makes the single-disease marginals biased in the first place.** That one sentence is the engine of the paper: same model, same method — the control pair succeeds and the treatment pair fails *because of correlation alone.*
+> **Correlation is what makes the single-disease marginals biased in the first place.** That one sentence is the engine of the paper: same model, same method — the control pair reproduces the joint and the treatment pair shows a measurable gap *because of correlation alone.*
 
 ---
 
@@ -61,13 +61,13 @@ The mechanism is sharper than that abstract condition, though. Because we train 
 Composition reproduces each disease's own appearance.
 → Presence and single-disease measurements on composed images match real single-disease images.
 
-**H2 — The joint is broken for the correlated pair.** *(the main claim)*
-Composition does **not** reproduce the statistical relationship between two correlated diseases.
-→ The joint distribution of (heart size, fluid blunting) in composed images differs from real both-disease X-rays, by more than the floor.
+**H2-control — The joint is reproduced for an independent pair.** *(the affirmative claim)*
+For two *uncorrelated* diseases, composition reproduces the statistical relationship.
+→ Composed vs real sits at the floor. This establishes that PoE is sound when its independence assumption holds.
 
-**H2-control — The joint is preserved for an independent pair.** *(isolates the cause)*
-For two *uncorrelated* diseases, composition *does* reproduce the joint.
-→ Composed vs real sits at the floor. Treatment fails + control succeeds ⇒ correlation is the cause, not the VAE or the training.
+**H2 — The joint shows a measurable gap for the correlated pair.** *(the limiting case)*
+When diseases are correlated, composition does not fully reproduce the statistical relationship.
+→ The joint distribution of (heart size, fluid blunting) in composed images differs from real both-disease X-rays, by more than the floor. Control reproduces the joint + treatment shows a gap ⇒ correlation is the cause, not the VAE or the training.
 
 **H3 — The break is structural.** *(rules out the easy explanation)*
 The H2 failure is intrinsic to the independence assumption — not a fixable imbalance.
@@ -77,7 +77,7 @@ The H2 failure is intrinsic to the independence assumption — not a fixable imb
 Anchoring at *health* approximates the joint better than anchoring at the *mixture*, because comorbid pathology is health plus added deviations.
 → Smaller H2 gap when we subtract `ε(z, normal)` than when we subtract the unconditional `ε(z, ∅)`. *(May also land "no difference" — the correlation gap can swamp it. Both publish.)*
 
-In one line: **H1 holds · H2 fails on the correlated pair · H2-control holds on the independent pair · H3 confirms it's structural · H-anchoring asks if a smarter anchor helps.** That is the paper.
+In one line: **H1 holds · H2-control holds on the independent pair · H2 shows a measurable gap on the correlated pair · H3 confirms it's structural · H-anchoring asks if a smarter anchor helps.** That is the paper.
 
 ---
 
@@ -87,10 +87,10 @@ Pick **two** disease pairs by their measured correlation. Same VAE, same LDM, sa
 
 | Pair | Correlation | Prediction |
 |------|-------------|------------|
-| **Treatment** — cardiomegaly + effusion | high (shared cause: heart failure) | PoE fails — gap above floor |
-| **Control** — an independent pair (e.g. a cardiac + an unrelated traumatic finding) | ≈ 0 (no shared cause) | PoE works — gap at floor |
+| **Control** — an independent pair (TBD via Exp 1) | ≈ 0 (no shared cause) | PoE reproduces the joint — gap at floor |
+| **Treatment** — cardiomegaly + effusion | high (shared cause: heart failure) | measurable gap above floor |
 
-If treatment fails while control succeeds, no skeptic can blame the codec or the training run. Correlation is isolated as the cause.
+If the control pair reproduces the joint while the treatment pair shows a gap, no skeptic can blame the codec or the training run. Correlation is isolated as the cause.
 
 ---
 
@@ -190,7 +190,12 @@ Two gates: experiment 1 decides whether the project is worth running; experiment
 - **Measure:** single-disease sample quality (FID vs real single-disease images).
 - **Gate:** unconvincing single-disease samples → the composition test means nothing.
 - **Figure:** single-disease sample grid.
-- **Compute:** UNet base ≤128ch · batch ≤8 + grad-accum · bf16. Fits the 4070.
+- **Compute:** RunPod A4000/A5000 · batch 16 bf16 · ~8h for 100k steps.
+
+> 📄 **Detailed operational design → [`plans/single-disease-ldm/EXPERIMENTS.md`](plans/single-disease-ldm/EXPERIMENTS.md)**
+> Covers: hypothesis + three-way falsification, class config + weighted sampling spec,
+> W&B logging spec (metrics, artifacts, intervals, success criteria), RunPod job config
+> (GPU choice, disk guard, kill criteria), CFG weight sweep for OOD compositional eval.
 
 ## 5 · Marginals check  💨 → tests **H1**  *(the gate before the headline)*
 
@@ -213,8 +218,8 @@ Two gates: experiment 1 decides whether the project is worth running; experiment
 - **Measure:** two-sample score + distribution distance on the **joint** (heart size, fluid blunting) — the *pair*, not each alone.
 - **Why this metric:** presence can't reveal a broken correlation — both diseases can be present yet combined unnaturally. Only the *joint* catches it.
 - **Three arms, one experiment:**
-  - **Treatment, null = `∅`** → tests **H2** (standard Liu PoE on the correlated pair).
-  - **Control pair, null = `∅`** → tests **H2-control** (same method, uncorrelated pair).
+  - **Control pair, null = `∅`** → tests **H2-control** (same method, uncorrelated pair — the affirmative case).
+  - **Treatment, null = `∅`** → tests **H2** (standard Liu PoE on the correlated pair — the limiting case).
   - **Treatment, null = `normal`** → tests **H-anchoring** (deviations-from-health anchor). One model, anchor swapped at inference.
 - **Decision (per arm, vs the floor):**
   - ✅ **gap is real** — two-sample score ≥ 0.65, above the floor's 95% upper bound.
@@ -257,7 +262,7 @@ Decided *before* any run, so results can't be narrated after the fact.
 
 | Outcome | What we will see |
 |---|---|
-| **Claim holds** | Exp 5 marginals clean · Exp 6 treatment ≥ 0.65 above floor **and** control ≈ floor · Exp 7 gap survives reweighting · Exp 8 PoE beats overlay |
+| **Claim holds** | Exp 5 marginals clean · Exp 6 control ≈ floor **and** treatment ≥ 0.65 above floor · Exp 7 gap survives reweighting · Exp 8 PoE beats overlay |
 | **Claim wrong** | Exp 6 treatment ≤ 0.55, indistinguishable from real → PoE reproduces the joint even when correlated *(clean null, still publishable)* |
 | **Anchoring** | smaller treatment gap under `normal` than `∅` → health anchor helps; or no difference → null choice is second-order. Either is reported. |
 | **In-between** | inconclusive → rerun with more samples. Not reinterpreted. |

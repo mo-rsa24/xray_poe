@@ -20,6 +20,8 @@ where ε_anchor is either the null token or the no-finding prediction, chosen by
 
 from __future__ import annotations
 
+from typing import Callable
+
 import torch
 from diffusers import DDIMScheduler
 
@@ -41,6 +43,7 @@ def cfg_single(
     steps: int = 50,
     anchor: str = "null",
     null_token_idx: int = 3,
+    step_callback: Callable[[int, int], None] | None = None,
 ) -> torch.Tensor:
     """DDIM CFG denoising for a single class label.
 
@@ -81,19 +84,21 @@ def cfg_single(
     unet.eval()
 
     z = noise.clone()
-    for t in ddim_scheduler.timesteps:
+    total_steps = len(ddim_scheduler.timesteps)
+    for i, t in enumerate(ddim_scheduler.timesteps):
         t_batch = t.expand(n).to(device)
 
         eps_cond = unet(z, t_batch, label_cond)
 
         if w == 1.0 and anchor == "null":
-            # no guidance needed (pure conditional)
             eps = eps_cond
         else:
             eps_uncond = unet(z, t_batch, label_uncond)
             eps = eps_uncond + w * (eps_cond - eps_uncond)
 
         z = ddim_scheduler.step(eps, t, z).prev_sample
+        if step_callback is not None:
+            step_callback(i + 1, total_steps)
 
     if was_training:
         unet.train()
@@ -113,6 +118,7 @@ def cfg_compose(
     cardio_idx: int = _CARDIO_IDX,
     effusion_idx: int = _EFFUSION_IDX,
     nf_idx: int = _NF_IDX,
+    step_callback: Callable[[int, int], None] | None = None,
 ) -> torch.Tensor:
     """PoE compositional denoising — generates co-morbid (cardio + effusion) latents.
 
@@ -156,16 +162,20 @@ def cfg_compose(
     unet.eval()
 
     z = noise.clone()
-    for t in ddim_scheduler.timesteps:
+    total_steps = len(ddim_scheduler.timesteps)
+    for i, t in enumerate(ddim_scheduler.timesteps):
         t_batch = t.expand(n).to(device)
 
         eps_anchor = unet(z, t_batch, label_anchor)
         eps_cardio = unet(z, t_batch, label_cardio)
         eps_effusion = unet(z, t_batch, label_effusion)
 
+        # PoE: ε_a + w·(ε_cardio − ε_a) + w·(ε_effusion − ε_a)
         eps = eps_anchor + w * (eps_cardio - eps_anchor) + w * (eps_effusion - eps_anchor)
 
         z = ddim_scheduler.step(eps, t, z).prev_sample
+        if step_callback is not None:
+            step_callback(i + 1, total_steps)
 
     if was_training:
         unet.train()
