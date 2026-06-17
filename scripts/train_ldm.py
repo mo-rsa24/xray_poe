@@ -17,7 +17,8 @@ W&B metrics (§4 of plans/single-disease-ldm/EXPERIMENTS.md):
     train/grad_norm         — every 100 steps
     val/loss                — every 1 000 steps
     recon_grid              — wandb.Image every 1 000 steps; Artifact ldm-recon-grid:step{N}
-    compose_grid            — wandb.Image every 5 000 steps (both anchors); Artifact ldm-compose-grid:step{N}
+    compose/null_anchor/w{w}    — wandb.Image every 5 000 steps; 4 panels (anchor×weight), 4 seeds each; Artifact ldm-compose-grid:step{N}
+    compose/healthy_anchor/w{w} —
 
 Checkpoints (every ckpt_every steps):
     model_step{N}.safetensors   — model weights (UNet + class_embed)
@@ -84,6 +85,11 @@ CLASS_NAMES = {0: "no_finding", 1: "cardiomegaly", 2: "effusion"}
 _COMPOSE_WEIGHTS = [1.0, 2.0]
 _COMPOSE_ANCHORS = ["null", "normal"]
 _COMPOSE_SEEDS = [42, 137, 256, 512]
+# Human-readable labels for compose grid panels and artifact rows
+_ANCHOR_DISPLAY = {
+    "null":   "∅-anchor (null token / unconditional)",
+    "normal": "healthy-anchor (no-finding class)",
+}
 
 
 def _load_vae_state(vae_model: torch.nn.Module, ckpt_path: str, map_location) -> str:
@@ -281,6 +287,76 @@ def _log_recon_grid(
         wandb.log_artifact(artifact, aliases=[f"step{step}"])
 
 
+def _build_compose_grid_image(
+    cells: dict[tuple[str, float], list],
+    step: int,
+) -> "Image.Image":
+    """Labeled 2D grid for the compose artifact.
+
+    Rows  = (anchor, weight) combos in _COMPOSE_ANCHORS × _COMPOSE_WEIGHTS order.
+    Cols  = seeds in _COMPOSE_SEEDS order.
+    Left margin shows the row label; top margin shows seed values.
+    """
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFont
+
+    row_order = [(a, w) for a in _COMPOSE_ANCHORS for w in _COMPOSE_WEIGHTS]
+    row_labels = {
+        ("null",   1.0): "∅-anchor  w=1.0",
+        ("null",   2.0): "∅-anchor  w=2.0",
+        ("normal", 1.0): "healthy-anchor  w=1.0",
+        ("normal", 2.0): "healthy-anchor  w=2.0",
+    }
+    n_rows = len(row_order)
+    n_cols = len(_COMPOSE_SEEDS)
+    H, W = cells[row_order[0]][0].shape
+
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
+        font_sm = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
+    except Exception:
+        font = font_sm = ImageFont.load_default()
+
+    LABEL_W = 220
+    HEADER_H = 32
+    SEP = 3
+
+    canvas_w = LABEL_W + W * n_cols
+    canvas_h = HEADER_H + (H + SEP) * n_rows
+    canvas = Image.new("L", (canvas_w, canvas_h), color=230)
+    draw = ImageDraw.Draw(canvas)
+
+    # Title bar
+    draw.rectangle([(0, 0), (canvas_w, HEADER_H - 1)], fill=50)
+    draw.text((LABEL_W + 4, 6),
+              f"Cardio+Effusion co-morbid  (PoE)   step={step}",
+              fill=220, font=font_sm)
+
+    # Column headers: seed values
+    for j, seed in enumerate(_COMPOSE_SEEDS):
+        x = LABEL_W + j * W + W // 2 - 30
+        draw.text((x, 8), f"seed {seed}", fill=220, font=font_sm)
+
+    # Rows
+    for i, key in enumerate(row_order):
+        y_top = HEADER_H + i * (H + SEP)
+
+        # Row label strip (dark background)
+        draw.rectangle([(0, y_top), (LABEL_W - 1, y_top + H - 1)], fill=50)
+        label = row_labels.get(key, str(key))
+        draw.text((6, y_top + H // 2 - 10), label, fill=220, font=font)
+
+        # Image cells
+        for j, img_np in enumerate(cells[key]):
+            canvas.paste(Image.fromarray(img_np, "L"), (LABEL_W + j * W, y_top))
+
+        # Separator
+        if i < n_rows - 1:
+            draw.rectangle([(0, y_top + H), (canvas_w, y_top + H + SEP - 1)], fill=80)
+
+    return canvas
+
+
 def _log_compose_grid(
     unet: torch.nn.Module,
     ddim_scheduler: DDIMScheduler,
@@ -289,16 +365,21 @@ def _log_compose_grid(
     device: torch.device,
     null_token_idx: int,
 ) -> None:
-    """Run cfg_compose for both anchors × both weights; log 8 images + Artifact.
+    """Run cfg_compose for all anchor × weight combos; log one W&B panel per combo + artifact.
 
+    W&B layout — 4 panels grouped under 'compose/':
+        compose/null_anchor/w1.0   — 4 seeds, ∅-anchor, w=1.0
+        compose/null_anchor/w2.0   — 4 seeds, ∅-anchor, w=2.0
+        compose/healthy_anchor/w1.0 — 4 seeds, healthy-anchor, w=1.0
+        compose/healthy_anchor/w2.0 — 4 seeds, healthy-anchor, w=2.0
+
+    Artifact: labeled 4×4 grid PNG (rows=anchor×weight, cols=seeds).
     Skips gracefully if cfg_compose is not yet implemented (plan 09 dependency).
     """
     from src.inference.cfg import cfg_compose
     import numpy as np
     from PIL import Image
 
-    images: list[wandb.Image] = []
-    grid_cells: list[np.ndarray] = []
     total_samples = len(_COMPOSE_ANCHORS) * len(_COMPOSE_WEIGHTS) * len(_COMPOSE_SEEDS)
     _console.log(
         f"[dim]{_now()}[/dim]  [cyan]PoE compose[/cyan]"
@@ -307,8 +388,17 @@ def _log_compose_grid(
         f" × {len(_COMPOSE_SEEDS)} seeds = {total_samples} samples[/dim]"
     )
 
+    # groups[(anchor, w)] = list of wandb.Image (one per seed)
+    groups: dict[tuple[str, float], list[wandb.Image]] = {}
+    cells: dict[tuple[str, float], list] = {}
+
     for anchor in _COMPOSE_ANCHORS:
+        anchor_disp = _ANCHOR_DISPLAY[anchor]
         for w in _COMPOSE_WEIGHTS:
+            formula = f"ε_a + {w}·(ε_cardio−ε_a) + {w}·(ε_effusion−ε_a)"
+            wandb_imgs: list[wandb.Image] = []
+            cell_arrays: list = []
+
             for seed in _COMPOSE_SEEDS:
                 _console.log(
                     f"  [dim]anchor=[/dim][yellow]{anchor}[/yellow]"
@@ -331,23 +421,33 @@ def _log_compose_grid(
                     decoded = decoded.sample
                 img_np = decoded[0, 0].float().clamp(-1, 1).cpu().numpy()
                 img_np = ((img_np + 1) / 2 * 255).clip(0, 255).astype(np.uint8)
-                caption = f"step={step} | w={w} | anchor={anchor}"
-                images.append(wandb.Image(Image.fromarray(img_np, "L"), caption=caption))
-                grid_cells.append(img_np)
 
-    if not images:
+                caption = (
+                    f"Co-morbid CXR: Cardiomegaly + Effusion (PoE) | "
+                    f"Anchor: {anchor_disp} | "
+                    f"Formula: {formula} | "
+                    f"seed={seed} | step={step}"
+                )
+                wandb_imgs.append(wandb.Image(Image.fromarray(img_np, "L"), caption=caption))
+                cell_arrays.append(img_np)
+
+            groups[(anchor, w)] = wandb_imgs
+            cells[(anchor, w)] = cell_arrays
+
+    if not groups:
         return
 
-    wandb.log({"compose_grid": images}, step=step)
+    # One W&B panel per (anchor × weight) — supervisor sees 4 named panels
+    panel_key_prefix = {"null": "null_anchor", "normal": "healthy_anchor"}
+    log_dict: dict[str, list[wandb.Image]] = {
+        f"compose/{panel_key_prefix[anchor]}/w{w:.1f}": imgs
+        for (anchor, w), imgs in groups.items()
+    }
+    wandb.log(log_dict, step=step)
 
-    # artifact: stitch all cells into one PNG (2 anchors × 2 weights × 4 seeds = 8 wide × 1 tall)
+    # Artifact: labeled 4-row × 4-col grid PNG
     with tempfile.TemporaryDirectory() as td:
-        W_px = grid_cells[0].shape[1]
-        H_px = grid_cells[0].shape[0]
-        canvas = np.zeros((H_px, W_px * len(grid_cells)), dtype=np.uint8)
-        for i, cell in enumerate(grid_cells):
-            canvas[:, i * W_px:(i + 1) * W_px] = cell
-        grid_pil = Image.fromarray(canvas, "L")
+        grid_pil = _build_compose_grid_image(cells, step)
         grid_path = Path(td) / f"compose_grid_step{step:07d}.png"
         grid_pil.save(grid_path)
         artifact = wandb.Artifact("ldm-compose-grid", type="recon-grid")
