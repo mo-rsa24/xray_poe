@@ -27,7 +27,7 @@ Usage (background-safe):
         --image-dir  data/nih/images \\
         --vae-ckpt   ckpts/vae_step0025000.pt \\
         --out-dir    /workspace/Paper3/data/latents \\
-        --batch-size 16 --num-workers 16 --write-workers 16 \\
+        --batch-size 24 --num-workers 16 --write-workers 16 \\
         > runs/precompute_latents.log 2>&1 &
 
     # then:
@@ -131,7 +131,12 @@ def encode_split(
     pending: list = []
 
     def _save(z_i: torch.Tensor, label: int, out_path: str) -> None:
-        torch.save({"z": z_i, "label": int(label)}, out_path)
+        # Write to a temp file then atomically rename so a worker killed
+        # mid-write can never leave a truncated/0-byte .pt behind (the resume
+        # logic and downstream loaders would then choke on EOFError).
+        tmp_path = f"{out_path}.tmp"
+        torch.save({"z": z_i, "label": int(label)}, tmp_path)
+        os.replace(tmp_path, out_path)
 
     t0 = time.time()
     done = 0
@@ -168,9 +173,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--image-dir", required=True)
     p.add_argument("--vae-ckpt", required=True)
     p.add_argument("--out-dir", required=True)
-    p.add_argument("--batch-size", type=int, default=16)
+    p.add_argument("--batch-size", type=int, default=24)
     p.add_argument("--num-workers", type=int, default=16, help="DataLoader decode workers")
     p.add_argument("--write-workers", type=int, default=16, help="Threaded .pt writers")
+    p.add_argument("--compile", dest="compile", action="store_true", default=True,
+                   help="torch.compile the VAE encode path (default on)")
+    p.add_argument("--no-compile", dest="compile", action="store_false",
+                   help="Disable torch.compile (eager encode)")
+    p.add_argument("--compile-mode", default="default",
+                   help="torch.compile mode: default | reduce-overhead | max-autotune")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--res", type=int, default=512)
     p.add_argument("--val-fraction", type=float, default=0.05)
@@ -195,6 +206,19 @@ def main() -> None:
     for p in vae.parameters():
         p.requires_grad_(False)
     print(f"Loaded VAE from {args.vae_ckpt}", flush=True)
+
+    # The encode is GPU-bound (~100% util, ~18 img/s eager at B=16); decode
+    # workers sit idle waiting on it.  cudnn.benchmark autotunes conv algos for
+    # the fixed 512x512 input, and torch.compile fuses the encoder kernels —
+    # together the main throughput lever short of dropping out of fp32.  Output
+    # stays fp32 and encode() already samples z~N(mu,sigma), so compile's ~1e-6
+    # rounding shift is far below the per-image sampling noise already in cache.
+    if args.device.startswith("cuda"):
+        torch.backends.cudnn.benchmark = True
+    if args.compile:
+        vae.encode = torch.compile(vae.encode, mode=args.compile_mode)
+        print(f"Compiled VAE encode (mode={args.compile_mode}); "
+              f"first batch pays one-off compile cost", flush=True)
 
     t = time.time()
     train_samples, val_samples = _collect_samples(
