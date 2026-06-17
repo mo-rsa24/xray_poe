@@ -54,12 +54,29 @@ def main() -> None:
 
     print(f"Sampling {n} latents from {latent_dir} ...")
     tensors = []
+    skipped = []
     for p in sampled:
-        z = torch.load(p, map_location="cpu")
+        try:
+            z = torch.load(p, map_location="cpu")
+        except Exception as exc:  # noqa: BLE001 — truncated/0-byte .pt; skip, don't crash
+            skipped.append((p, exc))
+            continue
         # Support both raw tensors and dicts with a 'latent' key
         if isinstance(z, dict):
             z = z.get("latent", z.get("z"))
         tensors.append(z.float().flatten())
+
+    if skipped:
+        print(f"WARNING: skipped {len(skipped)} unreadable latent file(s):",
+              file=sys.stderr)
+        for p, exc in skipped[:10]:
+            print(f"  {p}: {exc}", file=sys.stderr)
+        if len(skipped) > 10:
+            print(f"  ... and {len(skipped) - 10} more", file=sys.stderr)
+
+    if not tensors:
+        print("ERROR: no readable latents in the sample", file=sys.stderr)
+        sys.exit(1)
 
     all_latents = torch.cat(tensors)
     std = all_latents.std()
