@@ -84,77 +84,88 @@ class MonitorBatch:
         cfg_weight: float = 1.0,
         null_token_idx: int = 3,
         steps: int = 50,
-    ) -> "PILImage":
-        """Run DDIM denoising for all 12 slots and return a 4×3 PIL grid.
+    ) -> "tuple[PILImage, list]":
+        """Run DDIM denoising for all 12 slots; return labeled 4×3 PIL grid and uint8 cells.
 
-        Parameters
-        ----------
-        unet:
-            LDMUNet instance (has .unet and .class_embed).
-        ddim_scheduler:
-            DDIMScheduler with set_timesteps() available.
-        vae:
-            Frozen AutoencoderKL; used to decode z_0 → pixel space.
-        cfg_weight:
-            CFG guidance weight w (1.0 = standard; 0.0 = unconditional).
-        null_token_idx:
-            Label index for the unconditional path (default 3).
-        steps:
-            Number of DDIM denoising steps.
+        Returns
+        -------
+        grid_pil : PIL Image
+            Labeled overview grid (dark header + seed labels baked in).
+        cells : list[list[np.ndarray]]
+            cells[seed_i][cls_i] — uint8 (H, W) arrays for per-class W&B panels.
         """
         import numpy as np
-        from PIL import Image
+        from PIL import Image, ImageDraw, ImageFont
 
         ddim_scheduler.set_timesteps(steps)
         was_training = unet.training
         unet.eval()
 
-        cell_images: list[list[torch.Tensor]] = []  # [seed_i][cls_i]
+        cell_images: list[list] = []  # [seed_i][cls_i] float32 [0,1]
 
         for seed_i in range(self.n_seeds):
             row_imgs = []
             for cls_i, cls_label in enumerate(MONITOR_CLASSES):
-                z = self.noise_for(seed_i, cls_i).clone()   # (1, C, H, W)
+                z = self.noise_for(seed_i, cls_i).clone()
                 label_cond = torch.tensor([cls_label], device=self.device)
                 label_null = torch.tensor([null_token_idx], device=self.device)
 
                 for t in ddim_scheduler.timesteps:
                     t_batch = torch.tensor([t], device=self.device)
-
-                    # conditional and unconditional noise predictions
                     eps_cond = unet(z, t_batch, label_cond)
                     if cfg_weight != 1.0:
                         eps_uncond = unet(z, t_batch, label_null)
                         eps = eps_uncond + cfg_weight * (eps_cond - eps_uncond)
                     else:
                         eps = eps_cond
-
                     z = ddim_scheduler.step(eps, t, z).prev_sample
 
-                # decode z_0 → pixel
-                decoded = vae.decode(z)                     # (1, 1, H_px, W_px) or (1, 3, ...)
+                decoded = vae.decode(z)
                 if hasattr(decoded, "sample"):
                     decoded = decoded.sample
-                decoded = decoded.float().clamp(-1, 1)
-                decoded = (decoded + 1) / 2                 # [0, 1]
-                # take first channel if grayscale
-                img = decoded[0, 0].cpu().numpy()           # (H, W)
+                img = decoded[0, 0].float().clamp(-1, 1).cpu().numpy()
+                img = (img + 1) / 2  # [0, 1]
                 row_imgs.append(img)
             cell_images.append(row_imgs)
 
         if was_training:
             unet.train()
 
-        # --- assemble grid ---
+        # --- labeled canvas ---
         H_px, W_px = cell_images[0][0].shape
-        grid_h = self.n_seeds * H_px
-        grid_w = self.n_classes * W_px
-        canvas = np.zeros((grid_h, grid_w), dtype=np.float32)
+        LABEL_W = 120
+        HEADER_H = 30
+        COL_HEADERS = ["NO FINDING", "CARDIOMEGALY", "EFFUSION"]
 
+        try:
+            font = ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16
+            )
+        except Exception:
+            font = ImageFont.load_default()
+
+        canvas_w = LABEL_W + W_px * self.n_classes
+        canvas_h = HEADER_H + H_px * self.n_seeds
+        labeled = Image.new("L", (canvas_w, canvas_h), color=30)
+        draw = ImageDraw.Draw(labeled)
+
+        # Header bar: column labels
+        draw.rectangle([(0, 0), (canvas_w, HEADER_H - 1)], fill=20)
+        for cls_i, header in enumerate(COL_HEADERS):
+            x = LABEL_W + cls_i * W_px + W_px // 2 - len(header) * 4
+            draw.text((x, 7), header, fill=215, font=font)
+
+        # Rows: seed label + image cells
         for seed_i, row_imgs in enumerate(cell_images):
-            for cls_i, img in enumerate(row_imgs):
-                y0, x0 = seed_i * H_px, cls_i * W_px
-                canvas[y0:y0 + H_px, x0:x0 + W_px] = img
+            y_top = HEADER_H + seed_i * H_px
+            draw.rectangle([(0, y_top), (LABEL_W - 1, y_top + H_px - 1)], fill=20)
+            draw.text((4, y_top + H_px // 2 - 8), f"seed {self.seeds[seed_i]}", fill=180, font=font)
+            for cls_i, img_f in enumerate(row_imgs):
+                cell = Image.fromarray((img_f * 255).clip(0, 255).astype(np.uint8), "L")
+                labeled.paste(cell, (LABEL_W + cls_i * W_px, y_top))
 
-        canvas_uint8 = (canvas * 255).clip(0, 255).astype(np.uint8)
-        return Image.fromarray(canvas_uint8, mode="L")
+        cells_uint8 = [
+            [(img * 255).clip(0, 255).astype(np.uint8) for img in row]
+            for row in cell_images
+        ]
+        return labeled, cells_uint8

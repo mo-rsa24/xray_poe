@@ -16,7 +16,9 @@ W&B metrics (§4 of plans/single-disease-ldm/EXPERIMENTS.md):
     train/lr                — every step
     train/grad_norm         — every 100 steps
     val/loss                — every 1 000 steps
-    recon_grid              — wandb.Image every 1 000 steps; Artifact ldm-recon-grid:step{N}
+    recon/grid              — labeled 4×3 overview every 1 000 steps; Artifact ldm-recon-grid:step{N}
+    recon/{class}           — per-class gallery (4 seeds) every 1 000 steps
+    recon/cfg_ablation      — 3×3 grid (w=0/1/2 × class) every 1 000 steps, 20 DDIM steps
     compose/null_anchor/w{w}    — wandb.Image every 5 000 steps; 4 panels (anchor×weight), 4 seeds each; Artifact ldm-compose-grid:step{N}
     compose/healthy_anchor/w{w} —
 
@@ -258,6 +260,105 @@ def _log_per_class_loss(
     return per_class
 
 
+_CFG_ABLATION_WEIGHTS = [0.0, 1.0, 2.0]
+_CFG_ABLATION_STEPS = 20   # fast diagnostic — not for publication quality
+_CFG_ABLATION_ROW_LABELS = {
+    0.0: "w=0  unconditional",
+    1.0: "w=1  standard CFG",
+    2.0: "w=2  amplified",
+}
+
+
+def _log_cfg_ablation(
+    unet: torch.nn.Module,
+    monitor: MonitorBatch,
+    ddim_scheduler: DDIMScheduler,
+    vae,
+    step: int,
+    null_token_idx: int,
+    device: torch.device,
+) -> None:
+    """3×3 CFG weight ablation grid logged under 'recon/cfg_ablation'.
+
+    Rows = w∈{0,1,2}  (unconditional / standard / amplified).
+    Cols = no_finding / cardiomegaly / effusion.
+    Seed = monitor.seeds[0] (42). DDIM steps = 20 (diagnostic speed).
+    """
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFont
+
+    CLASS_INDICES = [0, 1, 2]
+    CLASS_DISPLAY = ["NO FINDING", "CARDIOMEGALY", "EFFUSION"]
+
+    ddim_scheduler.set_timesteps(_CFG_ABLATION_STEPS)
+    was_training = unet.training
+    unet.eval()
+    label_null = torch.tensor([null_token_idx], device=device)
+
+    cells: list[list] = []
+    with torch.no_grad():
+        for w in _CFG_ABLATION_WEIGHTS:
+            row: list = []
+            for cls_i, cls_idx in enumerate(CLASS_INDICES):
+                z = monitor.noise_for(0, cls_i).clone()  # seed 42, same slot as recon grid
+                label_cond = torch.tensor([cls_idx], device=device)
+                for t in ddim_scheduler.timesteps:
+                    t_batch = torch.tensor([t], device=device)
+                    eps_cond = unet(z, t_batch, label_cond)
+                    if w != 1.0:
+                        eps_uncond = unet(z, t_batch, label_null)
+                        eps = eps_uncond + w * (eps_cond - eps_uncond)
+                    else:
+                        eps = eps_cond
+                    z = ddim_scheduler.step(eps, t, z).prev_sample
+                decoded = vae.decode(z)
+                if hasattr(decoded, "sample"):
+                    decoded = decoded.sample
+                img_np = decoded[0, 0].float().clamp(-1, 1).cpu().numpy()
+                img_np = ((img_np + 1) / 2 * 255).clip(0, 255).astype(np.uint8)
+                row.append(img_np)
+            cells.append(row)
+
+    if was_training:
+        unet.train()
+
+    # Build labeled 3×3 grid
+    H_px, W_px = cells[0][0].shape
+    LABEL_W = 160
+    HEADER_H = 30
+    SEP = 2
+
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
+    except Exception:
+        font = ImageFont.load_default()
+
+    canvas_w = LABEL_W + W_px * 3
+    canvas_h = HEADER_H + (H_px + SEP) * 3
+    canvas = Image.new("L", (canvas_w, canvas_h), color=30)
+    draw = ImageDraw.Draw(canvas)
+
+    draw.rectangle([(0, 0), (canvas_w, HEADER_H - 1)], fill=20)
+    for ci, header in enumerate(CLASS_DISPLAY):
+        x = LABEL_W + ci * W_px + W_px // 2 - len(header) * 4
+        draw.text((x, 7), header, fill=215, font=font)
+
+    for wi, (w_val, row_imgs) in enumerate(zip(_CFG_ABLATION_WEIGHTS, cells)):
+        y_top = HEADER_H + wi * (H_px + SEP)
+        draw.rectangle([(0, y_top), (LABEL_W - 1, y_top + H_px - 1)], fill=20)
+        draw.text((4, y_top + H_px // 2 - 8), _CFG_ABLATION_ROW_LABELS[w_val], fill=180, font=font)
+        for ci, img_np in enumerate(row_imgs):
+            canvas.paste(Image.fromarray(img_np, "L"), (LABEL_W + ci * W_px, y_top))
+        if wi < 2:
+            draw.rectangle([(0, y_top + H_px), (canvas_w, y_top + H_px + SEP - 1)], fill=60)
+
+    caption = (
+        f"CFG ablation | seed={monitor.seeds[0]} | "
+        f"{_CFG_ABLATION_STEPS} DDIM steps | step={step}"
+    )
+    wandb.log({"recon/cfg_ablation": wandb.Image(canvas, caption=caption)}, step=step)
+
+
 def _log_recon_grid(
     unet: torch.nn.Module,
     monitor: MonitorBatch,
@@ -267,18 +368,31 @@ def _log_recon_grid(
     cfg_w: float,
     null_token_idx: int,
 ) -> None:
-    """Decode the 4×3 monitor grid and log as wandb.Image + Artifact."""
-    grid_pil = monitor.decode_grid(
+    """Decode the 4×3 monitor grid; log labeled overview + per-class panels + Artifact."""
+    from PIL import Image as _PILImage
+
+    grid_pil, cells = monitor.decode_grid(
         unet=unet,
         ddim_scheduler=ddim_scheduler,
         vae=vae,
         cfg_weight=cfg_w,
         null_token_idx=null_token_idx,
     )
-    caption = f"step={step} | w={cfg_w}"
-    wandb.log({"recon_grid": wandb.Image(grid_pil, caption=caption)}, step=step)
 
-    # also save as artifact
+    # Per-class panels: 4 seeds each — supervisor can pin 3 panels side-by-side
+    log_dict: dict = {}
+    for cls_i, cls_name in enumerate(["no_finding", "cardiomegaly", "effusion"]):
+        log_dict[f"recon/{cls_name}"] = [
+            wandb.Image(
+                _PILImage.fromarray(cells[seed_i][cls_i], "L"),
+                caption=f"seed={monitor.seeds[seed_i]} | w={cfg_w} | step={step}",
+            )
+            for seed_i in range(len(monitor.seeds))
+        ]
+    log_dict["recon/grid"] = wandb.Image(grid_pil, caption=f"step={step} | w={cfg_w}")
+    wandb.log(log_dict, step=step)
+
+    # artifact: labeled overview grid
     with tempfile.TemporaryDirectory() as td:
         grid_path = Path(td) / f"recon_grid_step{step:07d}.png"
         grid_pil.save(grid_path)
@@ -805,22 +919,24 @@ def main() -> None:
                     f"  loss=[bold magenta]{val_loss:.4f}[/bold magenta]"
                 )
 
-                # recon grid every 1 000 steps
+                # recon grid + CFG ablation every 1 000 steps
                 if vae_model is not None:
                     _console.log(
                         f"[dim]{_now()}[/dim]  step [bold]{step:>6}[/bold]"
-                        f"  [dim]recon grid  4×3 = 12 samples, 50 DDIM steps each[/dim]"
+                        f"  [dim]recon grid  4×3 = 12 samples, 50 DDIM steps"
+                        f"  +  CFG ablation  3×3, {_CFG_ABLATION_STEPS} steps[/dim]"
                     )
                     t0 = time.perf_counter()
                     if _vae_decode_only:
                         vae_model.to(device)
                     _log_recon_grid(unet, monitor, ddim_scheduler, vae_model, step, args.cfg_w, null_token_idx)
+                    _log_cfg_ablation(unet, monitor, ddim_scheduler, vae_model, step, null_token_idx, device)
                     if _vae_decode_only:
                         vae_model.to("cpu")
                         torch.cuda.empty_cache()
                     _console.log(
                         f"[dim]{_now()}[/dim]  step [bold]{step:>6}[/bold]"
-                        f"  [dim]recon grid → W&B  [{time.perf_counter()-t0:.1f}s][/dim]"
+                        f"  [dim]recon → W&B  [{time.perf_counter()-t0:.1f}s][/dim]"
                     )
 
             # compose grid every 5 000 steps (both anchors, both weights)
