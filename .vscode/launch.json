@@ -1,6 +1,6 @@
 {
   // Debug/run configs for the VAE scope. Entrypoints live in the `vae` package
-  // (plans/vae/plans/04). Created by plan 03-local-env-setup.
+  // (plans/00-vae/plans/04). Created by plan 03-local-env-setup.
   "version": "0.2.0",
   "configurations": [
     {

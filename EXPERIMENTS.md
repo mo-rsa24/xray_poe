@@ -192,7 +192,7 @@ Two gates: experiment 1 decides whether the project is worth running; experiment
 - **Figure:** single-disease sample grid.
 - **Compute:** RunPod A4000/A5000 · batch 16 bf16 · ~8h for 100k steps.
 
-> 📄 **Detailed operational design → [`plans/single-disease-ldm/EXPERIMENTS.md`](plans/single-disease-ldm/EXPERIMENTS.md)**
+> 📄 **Detailed operational design → [`plans/01-single-disease-ldm/EXPERIMENTS.md`](plans/01-single-disease-ldm/EXPERIMENTS.md)**
 > Covers: hypothesis + three-way falsification, class config + weighted sampling spec,
 > W&B logging spec (metrics, artifacts, intervals, success criteria), RunPod job config
 > (GPU choice, disk guard, kill criteria), CFG weight sweep for OOD compositional eval.

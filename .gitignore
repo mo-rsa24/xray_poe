@@ -1,5 +1,7 @@
 # large data & checkpoints — never commit these
 /data/
+data.zip
+*.zip
 ckpts/
 logs/
 figures/
@@ -14,6 +16,10 @@ __pycache__/
 .eggs/
 dist/
 build/
+illuminate-output/
+outputs/
+todoist/
+plans/
 *.so
 
 # Jupyter
@@ -24,6 +30,9 @@ build/
 *.env
 kaggle.json
 wandb/
+
+# local tool state
+.claude/todoist-sync.json
 
 # OS
 .DS_Store

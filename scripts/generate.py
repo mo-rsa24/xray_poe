@@ -74,7 +74,7 @@ def _load_vae(vae_ckpt: Path, device: torch.device):
     from vae.config import DEFAULT_CONFIG as vae_cfg
     model = VAE(vae_cfg).to(device)
     ckpt = torch.load(vae_ckpt, map_location=device)
-    model.load_state_dict(ckpt.get("model_state", ckpt))
+    model.load_state_dict(ckpt.get("model", ckpt.get("model_state", ckpt)))
     model.eval()
     for p in model.parameters():
         p.requires_grad_(False)
@@ -168,6 +168,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--steps", type=int, default=50, help="DDIM steps")
     p.add_argument("-o", "--output", default="outputs", help="Output root directory")
     p.add_argument("--device", default=None)
+    p.add_argument("--gen-batch-size", type=int, default=4,
+                   help="Images per inference batch — reduce if OOM (default 4 suits 8 GB VRAM)")
 
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--disease", choices=list(DISEASE_MAP.keys()),
@@ -216,48 +218,53 @@ def main() -> None:
         _console.log(
             f"[bold]Single-disease[/bold]  disease=[green]{args.disease}[/green]"
             f"  w=[cyan]{args.w}[/cyan]  anchor=[yellow]{args.anchor}[/yellow]"
-            f"  n={args.n}  steps={args.steps}"
+            f"  n={args.n}  steps={args.steps}  gen_batch={args.gen_batch_size}"
         )
-        noise = _noise_batch(args.n, args.seed, device)
-
-        prog, task_id = _make_ddim_progress(f"DDIM {args.disease}", args.steps)
+        all_imgs: list[Image.Image] = []
         t0 = time.perf_counter()
-        with prog:
-            z0 = cfg_single(
-                unet, noise, label_idx, args.w, ddim,
-                steps=args.steps, anchor=args.anchor, null_token_idx=null_token_idx,
-                step_callback=lambda i, _: prog.update(task_id, completed=i),
-            )
+        for start in range(0, args.n, args.gen_batch_size):
+            batch_n = min(args.gen_batch_size, args.n - start)
+            noise = _noise_batch(batch_n, args.seed + start, device)
+            label = f"DDIM {args.disease} [{start+1}–{start+batch_n}/{args.n}]"
+            prog, task_id = _make_ddim_progress(label, args.steps)
+            with prog:
+                z0 = cfg_single(
+                    unet, noise, label_idx, args.w, ddim,
+                    steps=args.steps, anchor=args.anchor, null_token_idx=null_token_idx,
+                    step_callback=lambda i, _: prog.update(task_id, completed=i),
+                )
+            all_imgs.extend(_decode_latents(z0, vae, scale_factor))
         dt = time.perf_counter() - t0
-        _console.log(f"  [dim]DDIM done  [{dt:.1f}s][/dim]")
-
-        imgs = _decode_latents(z0, vae, scale_factor)
-        _save_images(imgs, out_root / "single" / args.disease)
+        _console.log(f"  [dim]Done  {args.n} images  [{dt:.1f}s][/dim]")
+        _save_images(all_imgs, out_root / "single" / args.disease)
 
     # --- compositional sweep --------------------------------------------------
     elif args.compose:
         _console.log(
             f"[bold]PoE compose[/bold]  [dim]ε_a + w·(ε_cardio − ε_a) + w·(ε_effusion − ε_a)[/dim]"
             f"  anchor=[yellow]{args.anchor}[/yellow]  w∈{args.w_sweep}  n={args.n}  steps={args.steps}"
+            f"  gen_batch={args.gen_batch_size}"
         )
         for w in args.w_sweep:
             _console.log(f"  w=[cyan]{w}[/cyan]  generating {args.n} images…")
-            noise = _noise_batch(args.n, args.seed, device)
-
-            prog, task_id = _make_ddim_progress(f"PoE w={w}", args.steps)
+            all_imgs = []
             t0 = time.perf_counter()
-            with prog:
-                z0 = cfg_compose(
-                    unet, noise, w, ddim,
-                    steps=args.steps, anchor=args.anchor, null_token_idx=null_token_idx,
-                    step_callback=lambda i, _: prog.update(task_id, completed=i),
-                )
+            for start in range(0, args.n, args.gen_batch_size):
+                batch_n = min(args.gen_batch_size, args.n - start)
+                noise = _noise_batch(batch_n, args.seed + start, device)
+                label = f"PoE w={w} [{start+1}–{start+batch_n}/{args.n}]"
+                prog, task_id = _make_ddim_progress(label, args.steps)
+                with prog:
+                    z0 = cfg_compose(
+                        unet, noise, w, ddim,
+                        steps=args.steps, anchor=args.anchor, null_token_idx=null_token_idx,
+                        step_callback=lambda i, _: prog.update(task_id, completed=i),
+                    )
+                all_imgs.extend(_decode_latents(z0, vae, scale_factor))
             dt = time.perf_counter() - t0
-            _console.log(f"  [dim]DDIM done  [{dt:.1f}s][/dim]")
-
-            imgs = _decode_latents(z0, vae, scale_factor)
+            _console.log(f"  [dim]Done  {args.n} images  [{dt:.1f}s][/dim]")
             w_str = f"{w:.1f}".replace(".", "p")
-            _save_images(imgs, out_root / "compose" / f"w{w_str}")
+            _save_images(all_imgs, out_root / "compose" / f"w{w_str}")
 
     _console.print("\n[bold green]Done.[/bold green]")
 

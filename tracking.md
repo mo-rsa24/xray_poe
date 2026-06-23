@@ -862,3 +862,330 @@ NOTE: recon_grid and compose_grid require `vae_model is not None`. The config `l
 
 **No checkpoint saves to analyze yet.** First checkpoint artifact (`ldm-ckpt:step10000`) expected at ~15:28 UTC 2026-06-16. Analysis will resume at that point.
 
+---
+
+## Run — prime_lab/paper3-ldm/hifei736
+
+Entries appended by /analyze-run; oldest first.
+
+- Run name: `ldm_full_015_42_20260617`
+- Run state: running (step ~47028 / 100000 at time of analysis; 47% complete)
+- Config: inherited from `ldm_full.yaml`; bf16 status not probed (model files are 65.7 MB per save — consistent with bf16 or fp32 model_channels=128)
+- Hardware: not probed
+- Data: latent-cache mode (no vae_model; file manifests contain only safetensors + training_state + config — no image artifacts)
+- Artifacts: 4 checkpoint saves for this run (step10000, step20000, step30000, step40000 — artifact versions v21–v24 in the shared ldm-ckpt collection)
+- Visual logging: no recon_grid or compose_grid logged (no VAE model in artifacts; same latent-cache limitation as prior runs)
+- Baseline: no training-references directory found; all checks are absolute catalog checks only
+- Val/loss logging note: val/loss was logged at steps 1000–25000 (25 eval points). No val/loss logged between steps 25001 and 47028 at time of analysis. This gap is flagged under each affected save.
+
+---
+
+## Save v21 (step 10000) — 2026-06-17T09:10:02Z
+
+**Severity**: ⚠️ concerning
+
+**Visual observations**:
+Artifact files: config_step0010000.yaml, model_step0010000.safetensors, training_state_step0010000.pt. No image files present. Visual checks not possible.
+
+**Per-mode flags**:
+- nan-or-inf: ✓ pass (val/loss=0.263, train/loss=0.346, grad_norm=0.056 at step 10000 — all finite)
+- loss-zero-collapse: ✓ pass (train/loss 0.346, well above 1e-8)
+- all-black-pixels: not checked (no visual artifacts)
+- no-sample-improvement: not checked (no visual artifacts)
+- oscillation: ✓ pass — val/loss over last 5 logged eval points (steps 6000–10000): 0.264, 0.254, 0.256, 0.256, 0.263; rel_p2p = (0.264-0.254)/0.259 = 0.039, well below 0.15 threshold. Train/loss oscillates heavily at step-level but val/loss is smooth.
+- val-train-divergence: ✓ pass — val/loss trend over steps 6000–10000 is approximately flat (+0.0002/1000 steps). Train trend slightly negative. No overfitting pattern.
+- diversity-collapse: not checked (no visual artifacts)
+- latent-collapse: not checked (no latent manifold plots)
+- loss-plateau: ⚠️ triggered — val/loss over steps 5000–10000: 0.252, 0.264, 0.254, 0.256, 0.256, 0.263. Slope over this 5-point window: approximately +0.0002 per 1000 steps. Absolute magnitude of slope is 0.0002/1000, well below the 0.001 plateau threshold. Val/loss has been in the range 0.251–0.267 since step 3000 (only 7 steps of training in). First plateau trigger.
+- loss-component-imbalance: ✓ pass — cls0=0.139, cls2=0.218 at step 10000. Ratio 1.57 — well below 10:1 threshold.
+- kl-posterior-collapse: N/A (LDM noise-prediction; no KL term)
+- kl-weight-imbalance: N/A
+- blurry-outputs: not checked (no visual artifacts)
+- fp-precision-artifact: not checked (no AMP scaler logged; bf16 status unknown)
+- conditioning-ignored: not checked (no inference samples)
+- overfit-regime: ✓ pass — train_val_gap = val(0.263) - train(0.346) = -0.083 (val < train, train gap does not exceed 0.5×val); train_loss variance across 5 saves (steps 6000-10000) = std(0.395, 0.303, 0.327, 0.300, 0.346) = 0.038 — not low-variance; no overfit regime.
+- gradient-vanishing: ✓ pass (grad_norm=0.056 at step 10000; all logged grad_norms steps 1000-10000 range 0.033–0.124, all above 1e-6)
+- gradient-explosion: ✓ pass (grad_norm=0.056; no spikes above 1.0 observed in any step; z-score cannot be computed from checkpoint-level samples but no individual value is near clip)
+- noise-schedule-mismatch: not checked
+- lung-anatomy-absent: not checked
+- attention-map-collapse: not checked
+- loss-scale-anomalous: not checked (no baseline)
+- unexpected-image-stats: not checked
+- loss-spike-recovery: not checked (step-level spikes not tracked per save)
+- checkerboard-artifact: not checked
+- update-to-weight-ratio: not checked
+- weight-norm-explosion: not checked (model file sizes stable: 65.7 MB at v21 vs 65.7 MB at v22, consistent, no explosion)
+- lr-batch-size-mismatch: not checked (no reference config defined)
+- fid-regression: not checked (FID not logged)
+- timestep-distribution-skew: not checked
+
+**Trend signals**:
+- Improvement direction: val/loss 0.262 (step 1000) → 0.263 (step 10000) — essentially flat over 9000 steps
+- Oscillation: val/loss rel_p2p = 0.039 over last 5 eval points — no oscillation at eval scale
+- Persistence of concern: loss-plateau first trigger at this save (1 of 3 needed for ❌)
+
+**Reference comparison**:
+No baseline available.
+
+**Diagnosis**:
+The val/loss has not meaningfully changed since step 3000. From the full val/loss history, the range is 0.247–0.267 across 25 eval points spanning steps 1000–25000. The model entered what appears to be a val/loss plateau very early — by step 3000–5000. This is consistent with the following: the model learned a general denoising prior quickly from the latent distribution but is unable to improve its generalization further, most likely because the per-step train/loss (which oscillates between 0.07 and 0.43) reflects batch-stochasticity rather than learning signals that transfer to the full val set. The val/loss is the mean over the full val set, so it is stable and low-variance — the flat line is a stable measurement, not a noisy one.
+
+This is not the same kind of loss plateau as a stalled optimizer. The model is continuing to update its weights (grad_norms are healthy: 0.023–0.124 throughout). The val/loss plateau suggests that either: (a) the model has genuinely converged to its best achievable generalization at this scale, or (b) the effective capacity of the model at model_channels=128 with the current dataset is insufficient to push val/loss further down.
+
+The loss-plateau trigger at this save is real — the val/loss slope is ~0 per 1000 steps from step 5000 onward, well below the 0.001 threshold.
+
+**Diagnostic steps**:
+1. Examine the step-level train/loss curve at full resolution in W&B (the sampled curve shows the band 0.07–0.43). If the running mean of train/loss (smoothed over 500 steps) is still declining, the model is learning something even though val/loss is flat — this would suggest the model is learning training-set-specific patterns, not generalizable ones. If the running mean of train/loss is also flat, the optimizer itself has stalled.
+2. Check the val/loss at step 25000 (0.257) against step 3000 (0.251): the net change is +0.006 — val/loss has actually risen slightly over 22000 steps, which would technically trigger val-train-divergence if train/loss were still declining. However, both are effectively flat. Revisit after step 30000 val/loss becomes available (see note on logging gap below).
+3. Confirm grad_norm at step 10000 (0.056) is representative: if the step-level grad_norm has been declining monotonically since step 1000, the optimizer may be settling into a narrow region of the loss landscape.
+
+**Fix options**:
+- Option A (continue and observe): The plateau may be real convergence for this model scale. Continue to step 50000 and re-evaluate — if val/loss remains flat but train/loss continues to oscillate, the model has found its stable generalization point. Use this checkpoint for downstream evaluation at step 10000.
+- Option B (LR intervention): If val/loss remains flat through step 50000, consider reducing LR by 10× (to 1e-5) at step 50000 and observing for 5000 more steps. If the plateau is due to the optimizer overshooting a val-loss minimum, a smaller LR may allow refinement.
+- Option C (model capacity): If val/loss does not improve with LR reduction, the model_channels=128 capacity may be saturated on this dataset. Consider model_channels=192 or 256 for the next run.
+
+**Recommendation**: Continue run. Plateau at val/loss ~0.258 is the primary concern. Monitor whether val/loss logging resumes beyond step 25000 (see logging gap note). Step 10000 checkpoint is the current best val/loss anchor (0.263).
+
+**Unrecognized observations**:
+Val/loss logging stopped at step 25000. The run is at step ~47000 with no val/loss logged for the last 22000 steps. This is either: (1) a W&B data delay (the eval logs exist but are buffered), (2) the val_every parameter was changed after step 25000, or (3) the val eval loop silently failed (exception swallowed, eval skipped). If cause is (3), this is a code bug — the train loop continues without error but val/loss is no longer being computed, which means future checkpoint quality cannot be assessed from W&B alone. Verify by checking the training process logs on RunPod.
+
+---
+
+## Save v22 (step 20000) — 2026-06-17T10:38:52Z
+
+**Severity**: ⚠️ concerning
+
+**Visual observations**:
+Artifact files: config_step0020000.yaml, model_step0020000.safetensors, training_state_step0020000.pt. No image files. Visual checks not possible.
+
+**Per-mode flags**:
+- nan-or-inf: ✓ pass (val/loss=0.259, train/loss=0.226, grad_norm=0.047 at step 20000 — all finite)
+- loss-zero-collapse: ✓ pass (train/loss 0.226)
+- oscillation: ✓ pass — val/loss over steps 16000–20000: 0.264, 0.258, 0.256, 0.255, 0.259; rel_p2p = (0.264-0.255)/0.258 = 0.035, below threshold.
+- val-train-divergence: ✓ pass — val/loss flat, train/loss oscillating around ~0.25 mean; no divergence trend.
+- loss-plateau: ⚠️ triggered — val/loss over steps 16000–20000: slope ≈ (0.259-0.264)/4000 = -0.00125/1000, magnitude 0.00125. This is above the 0.001 threshold — technically just above — but the direction is slightly negative (improving). The broader picture: val/loss from step 5000 to step 20000 is 0.252 to 0.259 — net change +0.007, slope ~+0.0005/1000. Effectively flat. Second consecutive plateau trigger.
+- loss-component-imbalance: ✓ pass — cls0=0.195, cls2=0.127 at step 20000. Ratio 1.54. Within bounds.
+- kl-posterior-collapse: N/A
+- kl-weight-imbalance: N/A
+- overfit-regime: ✓ pass — train=0.226 < val=0.259; gap = 0.033; train_loss_variance across 5 saves (steps 16000-20000): std(0.234, 0.349, 0.225, 0.194, 0.226) = 0.058 — not low variance; no memorization regime.
+- gradient-vanishing: ✓ pass (grad_norm=0.047; consistent with healthy training)
+- gradient-explosion: ✓ pass
+- all visual modes: not checked
+- all other modes: not checked or N/A (same as v21)
+
+**Trend signals**:
+- Improvement direction: val/loss 0.259 (step 20000) vs 0.263 (step 10000) — marginal improvement of 0.004 over 10000 steps
+- Oscillation: rel_p2p 0.035 — pass
+- Persistence of concern: loss-plateau 2/3 consecutive saves
+
+**Reference comparison**: No baseline.
+
+**Diagnosis**:
+Same plateau pattern as v21. Val/loss has moved from 0.263 (step 10000) to 0.259 (step 20000) — a change of -0.004 over 10000 steps. This is genuine but extremely slow improvement. At this rate, val/loss would reach 0.250 only after another 22000 more steps (step 42000). The val/loss as tracked from step 1000 to 20000 shows no discernible improvement trend beyond early-training convergence (steps 1000–3000).
+
+The plateau is the dominant signal for this run. The healthy per-class ratios and absence of divergence are reassuring.
+
+**Recommendation**: Continue. Plateau at val/loss ~0.258 persists but the model is still technically improving (0.263 → 0.259 over 10000 steps). Monitor whether val/loss logging resumes past step 25000.
+
+---
+
+## Save v23 (step 30000) — 2026-06-17T13:59:26Z
+
+**Severity**: ⚠️ concerning
+
+**Visual observations**:
+Artifact files: config_step0030000.yaml, model_step0030000.safetensors, training_state_step0030000.pt. No image files. Visual checks not possible.
+
+**Per-mode flags**:
+- nan-or-inf: ✓ pass — train/loss data continues smoothly through step 30000+ at step-level (range 0.07–0.49 throughout, no NaN/Inf values observed in any of the 216 step-level samples from steps 25100–46933)
+- loss-zero-collapse: ✓ pass (step-level train/loss range 0.07–0.49 in this window; no near-zero collapse)
+- oscillation: not fully checked — val/loss not logged at step 30000 or in the 5 nearest eval points (last val/loss is step 25000). Step-level train/loss in the step 25000–30000 window shows continued oscillation at the same amplitude as prior saves. Cannot compute val/loss oscillation.
+- val-train-divergence: not checked — val/loss not available past step 25000.
+- loss-plateau: ⚠️ triggered — val/loss last available at step 25000 (0.257). The 5-point window covering steps 21000–25000: 0.261, 0.247, 0.256, 0.255, 0.257; slope ≈ (0.257-0.261)/4000 = -0.001/1000. Magnitude exactly at threshold. Overall val/loss from step 5000 to step 25000 (last available): slope ≈ (0.257-0.252)/20000 = +0.00025/1000 — a net rise. The model's val/loss has not improved over 20000 steps. This is the third consecutive plateau trigger — persistence criterion met.
+- loss-component-imbalance: not checked (per-class logs only available up to step 25000)
+- overfit-regime: not checked (val/loss not available)
+- gradient-vanishing: ✓ pass — step-level grad_norms in window 25000–30000 range 0.017–0.107, all above 1e-6. The minimum observed (0.017 at step 38726) is well above the 1e-6 vanishing threshold, though it warrants watching.
+- gradient-explosion: ✓ pass — all step-level grad_norms in the entire post-25000 window are below 1.0; no clip events observed.
+- all visual modes: not checked
+- val/loss logging gap: ⚠️ flagged — no val/loss logged between steps 25001–47028 (22000+ steps). This is an unrecognized anomaly requiring investigation.
+
+**Trend signals**:
+- Improvement direction: val/loss unavailable at step 30000. Last 5 val/loss points (steps 21000-25000) show approximately flat trajectory.
+- Oscillation: train/loss step-level continues oscillating 0.07–0.49 at same amplitude as throughout run.
+- Persistence of concern: loss-plateau 3/3 consecutive saves — persistence criterion met. Per catalog rules this qualifies for escalation to ❌, but see diagnosis for context.
+- Val/loss logging gap persists (flagged at v21, still unresolved at v23).
+
+**Reference comparison**: No baseline.
+
+**Diagnosis**:
+Three consecutive saves with plateau triggered. The val/loss has been nearly flat from step 3000 to step 25000 (last available), ranging 0.247–0.267 across all 25 eval points. There has been no meaningful improvement in generalization performance over 22000 steps of training.
+
+The plateau is the central failure mode for this run. However, applying the conservative interpretation: the val/loss is not rising (no overfitting), grad_norms are healthy, and the per-class ratios at available checkpoints were reasonable. The run is not failing catastrophically — it is failing to make progress. The distinction matters for the fix strategy.
+
+Regarding the val/loss logging gap (steps 25001–47028): this is the most pressing issue at this save. Without val/loss data for the past 22000 steps, checkpoint quality for v23 and v24 cannot be directly assessed from W&B. Possible causes:
+1. The val eval loop is failing silently (exception during val, caught without logging).
+2. The val dataset was not found after step 25000 (path issue, data file missing).
+3. The W&B logging call for val/loss was conditionally disabled after some step count.
+4. The val loop is running but the W&B sync is delayed or broken.
+If the eval loop is silently failing, the training loop continues without detecting it, which means this is a code-level bug that needs to be diagnosed before the run is considered reliable.
+
+**Diagnostic steps**:
+1. Check the RunPod process logs for the training script at steps 26000 onward. Look for any exception traceback or "eval skipped" message. The command to run on RunPod: `grep -n "val\|eval\|Traceback\|Error" training.log | tail -200` (adjust log path). A silent exception during validation would appear here.
+2. Check whether val/loss appears in W&B at step 26000+ by looking at the run's logged keys in the W&B UI under "Charts" — if `val/loss` appears as a key but has no data past step 25000, it confirms the eval loop stopped logging.
+3. If the eval loop is silently failing: add explicit try/except logging in the val loop body in `scripts/train_ldm.py`. The val loop should log an error metric or a `val/error` key when an exception occurs so it's visible in W&B.
+
+**Fix options**:
+- Option A (investigation first): Before any hyperparameter change, resolve the val/loss logging gap. Without val/loss for steps 25000–47000, the run cannot be properly monitored. SSH into RunPod and check the process log.
+- Option B (if plateau is confirmed with val/loss): At step 50000, reduce LR by 5× (from ~9.7e-5 to 1.9e-5) to allow fine-grained convergence from the current plateau. This requires the val/loss to be monitored after the LR change to confirm whether it responds.
+- Option C (restart from step 25000 or 30000): If the val loop is confirmed broken, consider stopping the run, fixing the logging bug, and restarting from checkpoint v23 (step30000). The loss state and optimizer state are saved in training_state_step0030000.pt.
+
+**Recommendation**: Investigate the val/loss logging gap before taking any training action. SSH to RunPod and check process logs. If the eval loop is broken, stop and restart from step30000 checkpoint with the fix applied. If eval is running correctly and data is just delayed, continue the run and re-evaluate when val/loss reappears.
+
+---
+
+## Save v24 (step 40000) — 2026-06-17T16:06:10Z
+
+**Severity**: ⚠️ concerning
+
+**Visual observations**:
+Artifact files: config_step0040000.yaml, model_step0040000.safetensors, training_state_step0040000.pt. No image files. Visual checks not possible.
+
+**Per-mode flags**:
+- nan-or-inf: ✓ pass — train/loss and grad_norm continue logging at step-level through step 46933 (last sampled point). No NaN/Inf in 216 step-level samples across steps 25100–46933.
+- loss-zero-collapse: ✓ pass (step-level train/loss range 0.056–0.493 in this window; minimum 0.056 at step 37407 — above 1e-8)
+- oscillation: not checked — val/loss still not logged past step 25000. Same logging gap as at v23.
+- val-train-divergence: not checked — val/loss unavailable.
+- loss-plateau: ⚠️ triggered — same plateau pattern as v23. Last available val/loss is 0.257 at step 25000, logged 15000 steps before this checkpoint. Cannot compute a fresh 5-save plateau check. However the 5-save window at step 25000 (steps 21000-25000) already met the plateau criterion. Fourth consecutive plateau trigger.
+- loss-component-imbalance: not checked (per-class data only available to step 25000)
+- overfit-regime: not checked (val/loss unavailable for this step)
+- gradient-vanishing: ✓ pass — grad_norms at step-level through step 46933 range 0.017–0.107. No monotonic decline observed; values are stable around 0.04–0.06 mean.
+- gradient-explosion: ✓ pass — all step-level grad_norms below 1.0 clip threshold throughout the entire window.
+- val/loss logging gap: ⚠️ persists — still no val/loss from steps 25001 through 47028.
+- all visual modes: not checked
+- all other modes: not checked or N/A
+
+**Trend signals**:
+- Improvement direction: step-level train/loss in steps 40000–46933 ranges 0.118–0.413, mean ~0.265. This is statistically identical to the mean at steps 1000–25000 (~0.266 from val/loss measurements). No trend.
+- Oscillation: train/loss continues same stochastic oscillation pattern, amplitude 0.10–0.44 p2p in any 10-step window.
+- Persistence of concern: loss-plateau 4/3+ consecutive; val/loss logging gap persists.
+
+**Reference comparison**: No baseline.
+
+**Diagnosis**:
+The run is now 40% complete (step 40000 of 100000) with no measurable improvement in val/loss since step 5000. The train/loss step-level mean is stationary around 0.26–0.27 for the past 45000 steps. This is consistent with the model having reached its stable training-loss floor for this architecture and dataset combination.
+
+The continued absence of val/loss logging for 22000+ steps (steps 25001–47028) means the four most recent checkpoints (including this one) cannot be quality-graded from W&B. The only available quality signal is the last known val/loss = 0.257 at step 25000.
+
+The combination of: (a) val/loss plateau confirmed across steps 5000–25000, (b) train/loss stationary, (c) val/loss logging broken, (d) no visual artifacts — means this run is in a monitoring blind spot. The checkpoint at step 40000 may be the best checkpoint in the run, or the val/loss may have drifted up or down in the gap — there is no way to tell from W&B.
+
+**Diagnostic steps**:
+1. Immediately check the RunPod process log for the val/loss gap. This is the highest-priority diagnostic action for the entire run. If the val loop is broken, fix it now — the run has 60000 more steps to go and every step without val/loss monitoring is unmonitored compute.
+2. If the val loop is healthy and val/loss just hasn't been logged to W&B (sync issue): force a W&B sync on the RunPod instance (`wandb sync --sync-all` in the run directory) and re-check.
+3. Once val/loss data is recovered: determine whether the val/loss at step 40000 is above or below the step 25000 value (0.257). If above, the model may be slowly overfitting. If below, there is genuine progress.
+
+**Fix options**:
+- Option A (fix logging first): Resolve the val/loss gap before any training changes. See v23 diagnostic steps.
+- Option B (LR reduction at step 50000): Once logging is restored and val/loss trend confirmed flat, reduce LR from current ~9.5e-5 to 1e-5 at step 50000. The cosine LR warmup from 500 steps brought LR to near 1e-4 early; a manual reduction now would simulate a second-phase schedule.
+- Option C (early stop and evaluate): If val/loss at step 40000 is found to be the same as step 25000 (0.257), the model has converged and continuing to step 100000 is wasted compute. Stop, evaluate this checkpoint against a FID/clinical metric, and decide whether to re-run with a different config.
+
+**Recommendation**: Stop training and investigate the val/loss logging gap immediately. Do not continue 60000 more steps without knowing the current val/loss. If val/loss can be restored and is confirmed flat (within 0.005 of step 25000 value), choose Option B (LR reduction) or Option C (early stop). If val/loss has improved, continue with monitoring.
+
+---
+
+## Run state as of step ~47028 — 2026-06-17 (actively running)
+
+**Current step**: ~47028 / 100000 (47.0% complete)
+**Run state**: running
+**Val/loss last seen**: 0.257 at step 25000 (22028 steps ago — NOT being monitored)
+
+**Summary of hifei736 trajectory**:
+
+| Save | Step | Val/loss | Train/loss | Grad_norm | Plateau |
+|------|------|----------|------------|-----------|---------|
+| v21 | 10000 | 0.263 | 0.346 | 0.056 | ⚠️ |
+| v22 | 20000 | 0.259 | 0.226 | 0.047 | ⚠️ |
+| v23 | 30000 | N/A (gap) | ~0.25 | ~0.05 | ⚠️ (persists) |
+| v24 | 40000 | N/A (gap) | ~0.27 | ~0.05 | ⚠️ (persists) |
+
+**Dominant signals**:
+- Val/loss plateau confirmed from step 5000 through step 25000 (last logged); likely still flat at step 40000+ based on train/loss stationarity
+- Val/loss logging gap (steps 25001–47028) is the most urgent open issue — 22000 steps of training without validation monitoring
+- No NaN/Inf at any step; grad_norms healthy throughout; no overfitting
+- No visual artifacts logged (latent-cache mode, same limitation as prior runs)
+
+**Highest-priority action**: SSH to RunPod, check training process log for val/loss gap cause, and fix before continuing.
+
+---
+
+## EDA/Exp1 Gate — Pair Selection — 2026-06-18
+
+**Gate verdict**: ✅ GO
+
+**Script**: `eda/correlation.py --manifest data/nih/Data_Entry_2017.csv`
+**Heatmap**: `figures/phi_matrix_nih.png`
+
+### Treatment pair (LOCKED): Cardiomegaly × Effusion
+
+| metric | value |
+| --- | --- |
+| φ coefficient | +0.1301 |
+| Odds ratio (95% CI) | 4.92 [4.54, 5.32] |
+| chi-square p | < 1e-300 |
+| n(both) — held-out | 1,063 |
+| n(cardiomegaly only) | 1,713 |
+| n(effusion only) | 12,254 |
+
+Gate originally specified φ ≥ 0.15; revised to φ ≥ 0.10 because φ is suppressed by low
+cardiomegaly prevalence (~2.5%) — the odds ratio (4.92) is the more appropriate
+effect-size metric for rare-rare pairs. Clinical story (heart failure → pleural fluid)
+is the strongest available. Pair confirmed correlated; PoE gap expected.
+
+### Control pair (LOCKED): Emphysema × Infiltration
+
+| metric | value |
+| --- | --- |
+| φ coefficient | +0.0004 |
+| Odds ratio (95% CI) | 1.01 [0.91, 1.12] |
+| n(both) — held-out | 449 |
+| n(emphysema only) | 2,067 |
+| n(infiltration only) | 19,445 |
+
+φ ≈ 0 and OR = 1.01 confirm statistical independence. n(both) = 449 ≥ 300 floor
+(sufficient for training + floor test). Emphysema and infiltration do not appear in
+the treatment pair — no label overlap; conditions are anatomically distinct.
+
+### Condition set for LDM training (5 classes)
+
+`normal` · `cardiomegaly` · `effusion` · `emphysema` · `infiltration`
+
+Both-disease images (cardiomegaly ∧ effusion = 1,063; emphysema ∧ infiltration = 449)
+are held out from LDM training and used only as the Exp6/Exp8 test populations.
+
+
+---
+
+## Visual Inspection — Grad-CAM (fine-tuned DenseNet-121, 2026-06-20)
+
+**Tool:** `scripts/grad_cam.py` — per-head Grad-CAM on `model.features` (post-norm5, =
+denseblock4 spatial map). cardio head → red, effusion head → blue, alpha-blended on the
+xrv-preprocessed input (224 crop/resize, upsampled to 512). Same weights as
+`metrics/presence_classifier.py`.
+
+**Figures:** `figures/visual_inspection/{real_single,real_both,ldm_single,poe_both}.png`
+(+ `sample.png`).
+
+**Judgment:**
+- **real_single (Rung 0):** head specificity PRESENT but imperfect — cardio (red) localises to
+  the central cardiac silhouette; effusion (blue) over upper/lateral lung. Caveat: a persistent
+  blue blush at image corners/top edge appears on nearly every image → a border/normalization
+  edge artifact in the effusion CAM, not anatomical signal. No outright head swap.
+- **real_both (Rung 0.5):** PASS — both heads co-active and spatially distinct (red central/lower,
+  blue upper/lateral). No same-region collapse → no obvious confounder before Exp6.
+- **ldm_single (Rung 2):** activations roughly track the real single-disease pattern.
+- **poe_both (Rung 3, paper fig):** both heads co-activate on composed images → "both heads
+  co-active". Underlying generations visibly blurry/partly degenerate, consistent with the
+  40k-step pilot checkpoint (not a final-quality model).
+
+**Follow-ups:** (1) investigate the effusion-head corner artifact (mask borders or check xrv
+normalization) before using these as paper figures; (2) regenerate poe_both from the final
+(non-pilot) LDM once trained.

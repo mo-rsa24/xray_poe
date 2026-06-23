@@ -1,0 +1,7 @@
+{
+  "verdict": "VALIDATION PASS \u2713",
+  "youden_threshold_cardio": 0.6163421869277954,
+  "youden_threshold_effusion": 0.5156896710395813,
+  "val_auc_cardio": 0.9024206697604414,
+  "val_auc_effusion": 0.8904883137765357
+}

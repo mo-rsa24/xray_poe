@@ -43,24 +43,26 @@ and reweighting ruling out a fixable imbalance. The figure: a (heart size,
 blunting) scatter where each axis overlaps but the diagonal coupling differs only
 when correlated.
 
-## Operating Constraint — Local Authoring, Dumb Remote Execution
-All code is written, debugged, and committed **locally**, then pushed to GitHub.
-The rented RunPod GPU is a **dumb executor**: the only actions performed on it are
-`git clone` (or `git pull`) and running pre-written `bash` scripts to train the
-1 VAE and the 2 single-disease LDMs. No code authoring, no interactive debugging,
-no manual file editing, no notebook hacking on the remote box. If a training run
-needs a code change, the change is made locally, committed, pushed, and pulled —
-never edited in place on RunPod. This keeps every GPU-hour spent on compute, not
-development, and makes each remote run reproducible from a single commit SHA.
+## Operating Constraint — Local Authoring; Hippo as Primary Executor
+All code is written and committed **locally**, then pushed to GitHub. Execution
+runs on the Wits cluster node `hippo` (passwordless `ssh hippo`), reached by
+`git clone`/`git pull` — never moved by hand. Hippo is a **full working node**,
+not a dumb executor: the system Claude config (`~/.claude` — subagents, skills,
+hooks) and a project `.claude` are set up there, so authoring/debugging may happen
+on hippo as a second workstation. The surviving discipline is **GitHub as the
+single source of truth** — every change committed and pushed, each run
+reproducible from a commit SHA.
 
 Implications baked into the plans:
 
-- Each trainable component ships with a committed, self-contained `bash` entrypoint
-  (env setup → data fetch → train → checkpoint out) runnable with zero edits.
-- Data acquisition/preprocessing that the remote needs is either committed or
-  fetched by script at run time — not assumed present on the box.
-- The RunPod lifecycle (provision → clone → run → retrieve checkpoints → teardown)
-  lives entirely in `compute-budget/plans/runpod-execution/`.
+- Each trainable component ships a committed, self-contained `bash` entrypoint
+  (env setup → data fetch → train → checkpoint out) runnable from a clean clone.
+- The precomputed latents (~18GB) and the trained VAE checkpoint are shipped to
+  hippo directly (rsync/scp), not regenerated on the node.
+- The hippo lifecycle (push → clone → env → ship latents+ckpt → smoke-test → run)
+  lives in `05-compute-budget/plans/hippo-execution/`. RunPod stays a costed
+  **fallback** in `…/runpod-execution/` (⏸ superseded) — if ever used, it reverts
+  to the dumb-executor model (clone + bash only, no on-pod authoring).
 
 ## Definition of Done
 1. Dataset acquired and archives extracted; disk layout documented; every image
@@ -86,13 +88,37 @@ Implications baked into the plans:
 12. Every experiment's outcome filed against the pre-registration table — no post-hoc reinterpretation.
 
 ## Sub-Scopes
-- ⚠️ plans/data-foundation/ — "acquire, extract, and DICOM/monochrome-normalize into a clean corpus"
-- ⚠️ plans/eda/ — "size, imbalance, preprocessing, correlation matrix + visualizations; the gate"
-- ⚠️ plans/vae/ — "label-blind codec + ceiling check"
-- ⚠️ plans/single-disease-ldm/ — "single-disease experts with dual anchors"
-- ⚠️ plans/metrics-extractors/ — "the C2ST/MMD/FID/floor + extractor measurement layer Exp 5–8 depend on"
-- ⚠️ plans/composition-experiments/ — "PoE composition + the headline experiments"
-- ⚠️ plans/documentation/ — "running record of results + progress across all phases"
+
+Execution progression (P0–P7). Scope folders are **numbered `00-`…`08-` to reflect this
+order** (renamed 2026-06-20); cross-scope `relates-to:`/`blocked-by:` path references were
+rewritten to match. Re-derive with `/task-graph` after any structural edit.
+
+- **P0 (code-done / continuous)**
+  - ✅ plans/00-vae/ — "label-blind codec + ceiling check (code complete; real train deferred to runpod)"
+  - ⚠️ plans/01-single-disease-ldm/ — "single-disease experts with dual anchors (code; real train executes under runpod)"
+  - ⚠️ plans/08-documentation/ — "running record of results + progress across all phases (runs alongside every phase)"
+
+- **P1** ⚠️ plans/02-pre-evaluation/ — "pilot gate on the existing 40k LDM ckpt + fine-tuned classifier; go/no-go on the full NIH commitment"
+  blocked-by: vae (codec ckpt), single-disease-ldm (40k ckpt exists)
+
+- **P2** ⚠️ plans/03-data-foundation/ — "acquire + shared-preprocess NIH+VinDr into a clean 512² corpus; four-group partition; integrity manifest"
+  blocked-by: pre-evaluation (go decision)
+
+- **P3** ⚠️ plans/04-eda/ — "size, imbalance, image properties, correlation matrix + visualizations; the gate (corr-matrix pre-empted by pre-evaluation/02)"
+  blocked-by: data-foundation (corpus)
+
+- **P4** ⚠️ plans/05-compute-budget/ — "workload sizing → RunPod pricing → cost/decision memo"
+  blocked-by: vae (measured usage), single-disease-ldm (pilot cost)
+
+- **P5** ⚠️ plans/05-compute-budget/plans/hippo-execution/ — "push → clone → env → ship latents+VAE ckpt → smoke-test (unblocks P6/P7, which run on hippo)"
+  blocked-by: vae (trained ckpt + precomputed latents to ship), single-disease-ldm (train code)
+  - ⏸ plans/05-compute-budget/plans/runpod-execution/ — superseded by hippo-execution; retained as costed fallback
+
+- **P6** ⚠️ plans/06-metrics-extractors/ — "C2ST/MMD/FID/floor + extractors measurement layer Exp 5–8 depend on (01–04 parallelizable from P2; 05-validation needs generated images)"
+  blocked-by: hippo-execution (generated images for 05-extractor-validation)
+
+- **P7** ⚠️ plans/07-composition-experiments/ — "PoE composition + the headline experiments (Exp5–8)"
+  blocked-by: hippo-execution (trained LDM), metrics-extractors (measurement layer)
 
 ## Plans
 (none yet — added by plan-day)

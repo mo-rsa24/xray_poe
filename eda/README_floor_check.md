@@ -1,6 +1,6 @@
 # Exp1 floor-power check — how to run the dataset decision
 
-`script: eda/floor_power_check.py` · `serves: data-foundation dataset choice + plans/eda/04-correlation-matrix` · `labels-only, no GPU`
+`script: eda/floor_power_check.py` · `serves: data-foundation dataset choice + plans/04-eda/04-correlation-matrix` · `labels-only, no GPU`
 
 Settles **NIH ChestX-ray14 vs VinBigData (VinDr-CXR)** on the number that governs it:
 the both-disease (cardiomegaly ∧ effusion) count **N_AB**, which sets the Exp6 *floor* —
