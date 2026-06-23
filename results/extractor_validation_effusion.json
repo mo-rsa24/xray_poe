@@ -1,0 +1,37 @@
+{
+  "auc_2d": 0.6518633778027192,
+  "auc_2d_std": 0.045455328892447584,
+  "floor95": 0.5570818145126814,
+  "clears_floor": true,
+  "threshold": 0.6,
+  "agree": false,
+  "n_real": 200,
+  "n_gen": 200,
+  "per_scalar": {
+    "heart_size": {
+      "real_mean": 0.6241015625,
+      "real_std": 0.293053232610655,
+      "gen_mean": 0.450927734375,
+      "gen_std": 0.3707837385953329,
+      "ks_stat": 0.365,
+      "ks_p": 3.0799540915748314e-12,
+      "auc": 0.799011672488711,
+      "floor95": 0.5814537380755935,
+      "clears_floor": true
+    },
+    "blunting": {
+      "real_mean": 0.06968197848265845,
+      "real_std": 0.08340821053806488,
+      "gen_mean": 0.10868629675027477,
+      "gen_std": 0.09314123102991911,
+      "ks_stat": 0.275,
+      "ks_p": 4.6128382074998843e-07,
+      "auc": 0.6230139230139229,
+      "floor95": 0.5589088676441802,
+      "clears_floor": true
+    }
+  },
+  "figure": "figures/extractor_validation_effusion.png",
+  "real_dir": "data/nih/images_effusion_only",
+  "gen_dir": "outputs/single/effusion"
+}

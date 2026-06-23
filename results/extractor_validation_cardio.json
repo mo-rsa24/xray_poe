@@ -1,0 +1,37 @@
+{
+  "auc_2d": 0.6762272902976421,
+  "auc_2d_std": 0.03188051577041546,
+  "floor95": 0.5573745398760781,
+  "clears_floor": true,
+  "threshold": 0.6,
+  "agree": false,
+  "n_real": 200,
+  "n_gen": 200,
+  "per_scalar": {
+    "heart_size": {
+      "real_mean": 0.6063671875,
+      "real_std": 0.15965633200141024,
+      "gen_mean": 0.510400390625,
+      "gen_std": 0.3646165258647574,
+      "ks_stat": 0.47,
+      "ks_p": 2.458058343114842e-20,
+      "auc": 0.8551251742741105,
+      "floor95": 0.5741333315464656,
+      "clears_floor": true
+    },
+    "blunting": {
+      "real_mean": 0.04337158971798999,
+      "real_std": 0.06631255966681673,
+      "gen_mean": 0.10049083303722,
+      "gen_std": 0.09475299685974381,
+      "ks_stat": 0.37,
+      "ks_p": 1.4275699621532978e-12,
+      "auc": 0.6385096292037942,
+      "floor95": 0.5672666088585407,
+      "clears_floor": true
+    }
+  },
+  "figure": "figures/extractor_validation_cardio.png",
+  "real_dir": "data/nih/images_cardio_only",
+  "gen_dir": "outputs/single/cardiomegaly"
+}

@@ -131,6 +131,27 @@ def _gather_paths(dir_path: str | Path, n: int | None, seed: int = 42) -> list[P
     return paths
 
 
+def _val_split_paths(dir_path: str | Path, val_frac: float = 0.2,
+                     seed: int = 42, n: int | None = None) -> list[Path]:
+    """Reproduce the held-out VAL subset used during fine-tuning.
+
+    Mirrors scripts/finetune_classifier.NIHPresenceDataset exactly: sorted *.png →
+    random.Random(seed).shuffle → first `int(len*val_frac)`. Validating on these (not
+    the whole dir) keeps the check honest — the other 80% were training images.
+    """
+    dir_path = Path(dir_path)
+    paths = sorted(dir_path.glob("*.png"))           # dataset globs *.png only
+    if not paths:
+        raise RuntimeError(f"No PNG images in {dir_path}")
+    rng = random.Random(seed)
+    rng.shuffle(paths)
+    n_val = max(1, int(len(paths) * val_frac))
+    val = paths[:n_val]
+    if n is not None and n < len(val):
+        val = random.Random(seed).sample(val, n)
+    return val
+
+
 def _ci95(values: np.ndarray, n_boot: int = 1000) -> tuple[float, float]:
     rng = np.random.default_rng(0)
     boot = np.array([
@@ -163,12 +184,21 @@ def _run_validate(args: argparse.Namespace, model, cardio_idx, effusion_idx, ckp
         ("normal real",   args.real_normal,    "normal"),
     ]
     all_pass = True
+    summary: dict = {}
 
     for name, dir_arg, split in checks:
         if dir_arg is None:
             continue
-        print(f"\n── {name}: {dir_arg}")
-        paths = _gather_paths(dir_arg, args.n_validate)
+        if args.held_out:
+            paths = _val_split_paths(dir_arg, args.val_frac, args.val_seed, args.n_validate)
+            print(f"\n── {name}: {dir_arg}  (held-out val split: {len(paths)} imgs)")
+        else:
+            paths = _gather_paths(dir_arg, args.n_validate)
+            # a materialized split dir (…/splits/val/…) is already held-out; only the raw
+            # NIH group dirs mix train+val, so only warn there.
+            pre_split = "split" in str(dir_arg).lower() or Path(dir_arg).parent.name == "val"
+            note = "" if pre_split else "  — ⚠️ may include training data; use --held_out or data/splits/val/"
+            print(f"\n── {name}: {dir_arg}  ({len(paths)} imgs){note}")
         probs = predict_probs(model, paths, cardio_idx, effusion_idx, args.device)
 
         if split == "cardio":
@@ -176,6 +206,7 @@ def _run_validate(args: argparse.Namespace, model, cardio_idx, effusion_idx, ckp
             ok = s["mean"] >= thr_c
             print(f"  cardio  mean={s['mean']:.3f} 95%CI=[{s['ci95'][0]:.3f},{s['ci95'][1]:.3f}]"
                   f"  (need ≥{thr_c:.3f})  {'PASS' if ok else 'FAIL'}")
+            summary["cardio"] = {**s, "pass": ok}
             all_pass &= ok
 
         elif split == "effusion":
@@ -183,6 +214,7 @@ def _run_validate(args: argparse.Namespace, model, cardio_idx, effusion_idx, ckp
             ok = s["mean"] >= thr_e
             print(f"  effusion mean={s['mean']:.3f} 95%CI=[{s['ci95'][0]:.3f},{s['ci95'][1]:.3f}]"
                   f"  (need ≥{thr_e:.3f})  {'PASS' if ok else 'FAIL'}")
+            summary["effusion"] = {**s, "pass": ok}
             all_pass &= ok
 
         elif split == "normal":
@@ -192,22 +224,25 @@ def _run_validate(args: argparse.Namespace, model, cardio_idx, effusion_idx, ckp
             ok_e = se["mean"] < thr_e
             print(f"  cardio  mean={sc['mean']:.3f}  (need <{thr_c:.3f})  {'PASS' if ok_c else 'FAIL'}")
             print(f"  effusion mean={se['mean']:.3f}  (need <{thr_e:.3f})  {'PASS' if ok_e else 'FAIL'}")
+            summary["normal"] = {"cardio": sc, "effusion": se, "pass": bool(ok_c and ok_e)}
             all_pass &= ok_c and ok_e
 
     verdict = "VALIDATION PASS ✓" if all_pass else "VALIDATION FAIL"
     print(f"\n{verdict}")
 
-    if hasattr(args, "out") and args.out:
-        out_path = Path(args.out)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps({
-            "verdict": verdict,
-            "youden_threshold_cardio": thr_c,
-            "youden_threshold_effusion": thr_e,
-            "val_auc_cardio": ckpt.get("val_auc_cardio"),
-            "val_auc_effusion": ckpt.get("val_auc_effusion"),
-        }, indent=2))
-        print(f"Results → {out_path}")
+    out_path = Path(args.out or "results/pilot_validate.json")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps({
+        "verdict": verdict,
+        "held_out": bool(args.held_out),
+        "val_frac": args.val_frac if args.held_out else None,
+        "youden_threshold_cardio": thr_c,
+        "youden_threshold_effusion": thr_e,
+        "val_auc_cardio": ckpt.get("val_auc_cardio"),
+        "val_auc_effusion": ckpt.get("val_auc_effusion"),
+        "results": summary,
+    }, indent=2))
+    print(f"Results → {out_path}")
 
     return all_pass
 
@@ -238,6 +273,8 @@ def _run_eval(args: argparse.Namespace, model, cardio_idx, effusion_idx) -> None
             print(f"  H1 gate: {gate}")
 
         out[f"composed_{label}"] = {**s, "h1_gate": gate}
+
+    args.out = args.out or "results/exp5_presence.json"
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -272,7 +309,7 @@ def _run_joint(args: argparse.Namespace, model, cardio_idx, effusion_idx, ckpt: 
         "co_presence_threshold_cardio": thr_c,
         "co_presence_threshold_effusion": thr_e,
     }
-    out_path = Path(args.out)
+    out_path = Path(args.out or "results/exp5_joint.json")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(out, indent=2))
     print(f"\nResults → {out_path}")
@@ -292,6 +329,10 @@ def main() -> None:
     g.add_argument("--real_effusion", default=None, help="Dir of real effusion PNGs")
     g.add_argument("--real_normal",   default=None, help="Dir of real normal PNGs")
     g.add_argument("--n_validate",    type=int, default=None, help="Cap images per class")
+    g.add_argument("--held_out", action="store_true",
+                   help="Validate on the reproduced fine-tune VAL split only (not the whole dir)")
+    g.add_argument("--val_frac", type=float, default=0.2, help="Val fraction (match fine-tune: 0.2)")
+    g.add_argument("--val_seed", type=int, default=42, help="Val split seed (match fine-tune: 42)")
 
     g = p.add_argument_group("eval")
     g.add_argument("--composed_cardio",   default=None, help="Dir of composed cardio PNGs")
@@ -300,7 +341,8 @@ def main() -> None:
                    help="Real cardio presence mean for H1 gap check (from --mode validate)")
     g.add_argument("--real_effusion_mean", type=float, default=None)
     g.add_argument("--n",   type=int,  default=2000, help="Max images per condition")
-    g.add_argument("--out", default="results/exp5_presence.json")
+    g.add_argument("--out", default=None,
+                   help="Results JSON (per-mode default: pilot_validate / exp5_presence / exp5_joint)")
 
     g = p.add_argument_group("joint")
     g.add_argument("--composed_both", default=None, help="Dir of composed both-disease PNGs")

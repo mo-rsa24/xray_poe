@@ -1,0 +1,20 @@
+{
+  "composed_cardio": {
+    "mean": 0.3522859811782837,
+    "ci95": [
+      0.32861384749412537,
+      0.378534734249115
+    ],
+    "n": 200,
+    "h1_gate": "gap=0.432 vs real=0.784  \u2192 H1 NOT SUPPORTED (threshold <0.05)"
+  },
+  "composed_effusion": {
+    "mean": 0.773165762424469,
+    "ci95": [
+      0.7456696033477783,
+      0.7989743947982788
+    ],
+    "n": 200,
+    "h1_gate": "gap=0.066 vs real=0.707  \u2192 H1 NOT SUPPORTED (threshold <0.05)"
+  }
+}
