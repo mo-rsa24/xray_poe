@@ -28,7 +28,7 @@ S0  KICKOFF                                                        [blocks every
 | # | Step | Track | Scope it lives in | Runs in parallel with | Status |
 |---|------|-------|-------------------|------------------------|--------|
 | S0 | Kickoff: hippo env up, checkpoints loaded, W&B live | — | (ops) | — | ⬜ |
-| S1 | VAE certification: rFID gate → keep or fine-tune | A | `plans/00-vae` | S4 | ⬜ |
+| S1 | VAE certification: rFID gate → keep or fine-tune | A | `plans/00-vae` | S4 | 🔄 measured (rFID=1.81), pending S6 gen-FID for stamp |
 | S2 | Treatment-LDM continuation; save checkpoints often | A | `plans/01-single-disease-ldm` | all of Track B | ⬜ |
 | S4 | Metrics harness (FID + C2ST + both-present) + checkpoint-watcher + Grad-CAM fix + leakage harness | B | `plans/06-metrics-extractors` | S1, S2 | ⬜ |
 | S5 | Blinded radiologist present/absent labels | B | `plans/06-metrics-extractors` (07-visual-leakage) | everything — **start day 0** | ⬜ |

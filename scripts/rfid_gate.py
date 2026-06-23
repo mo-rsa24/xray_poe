@@ -17,34 +17,28 @@ No new metric math — this is glue over already-built, already-tested pieces:
     real-vs-real floor   results/floor.json         (context: the smallest gap that
                                                       is resolvable above noise)
 
-Three FID quantities are reported, all in the xrv (NIH DenseNet-121, 1024-d) domain
-feature space the rest of the eval uses:
-
-    rFID            FID(real originals, recon)  — the headline ceiling. Real set is
-                    the *original* images (what gen-FID in S6 also scores against),
-                    so this is the honest lower bound including any input-resize loss
-                    the codec pipeline imposes.
-    rFID_codec      FID(model input @512, recon @512) — isolates the encode→decode
-                    distortion alone (resize confound removed). Diagnostic: if
-                    rFID ≫ rFID_codec the loss is mostly the 1024→512 resize, not the
-                    codec, which changes the keep-or-fine-tune call.
-    floor.fid       FID(real half, real half) from results/floor.json — the noise
-                    floor. rFID must sit *above* it (recon ≠ identity) yet *far below*
-                    the target gen-FID.
+The FID is computed in the xrv (NIH DenseNet-121, 1024-d) domain feature space the
+rest of the eval uses, and against the *original* real images — the same set S6's
+gen-FID scores against — so rFID is the honest, apples-to-apples lower bound on
+gen-FID. floor.fid (from results/floor.json) is the noise floor: rFID must sit
+*above* it (recon ≠ identity) yet *far below* the target gen-FID.
 
 Pass: rFID <= target_gen_fid * margin  (default margin 1/3 → "far below").
+The target may be passed inline (--target-fid) or read from the S6 gen-FID JSON
+(--target-from results/fid.json) so the checkpoint-watcher can close the loop with
+no manual step.
 
 CLI:
-    # the gate (target gen-FID supplied → pass/fail verdict)
+    # the gate, target read straight from the S6 gen-FID result
     python scripts/rfid_gate.py --ckpt ckpts/vae_step0025000.pt \\
-        --real data/nih/images --n 512 --target-fid 12.0 \\
-        --out results/rfid_gate.json
+        --real data/nih/images --n 1063 --kid \\
+        --target-from results/fid.json --out results/rfid_gate.json
+
+    # target supplied inline instead
+    python scripts/rfid_gate.py --n 1063 --target-fid 12.0
 
     # measure only (no target yet → verdict "indeterminate", numbers still recorded)
-    python scripts/rfid_gate.py --n 128
-
-    # quick smoke on a handful (cpu-friendly)
-    python scripts/rfid_gate.py --n 16 --device cpu
+    python scripts/rfid_gate.py --n 1063
 """
 from __future__ import annotations
 
@@ -100,22 +94,19 @@ def load_vae(ckpt_path: Path, device: torch.device) -> VAE:
     return model.to(device).eval()
 
 
-# ── reconstruct a real set → write input@512 + recon@512 PNGs, accumulate SSIM/LPIPS ─
+# ── reconstruct a real set → write recon PNGs, accumulate SSIM/LPIPS ─────────────────
 
 @torch.no_grad()
 def reconstruct_set(
     model: VAE,
     paths: list[Path],
-    in_dir: Path,
     recon_dir: Path,
     device: torch.device,
     batch_size: int,
     res: int = 512,
 ) -> dict:
-    """Reconstruct each real image; save the model-input (resized) and the recon as
-    PNGs, and accumulate SSIM/LPIPS over the set. Returns mean recon metrics + the two
-    PNG dirs to feed the FID harness."""
-    in_dir.mkdir(parents=True, exist_ok=True)
+    """Reconstruct each real image; save the recon as a PNG and accumulate SSIM/LPIPS
+    over the set. Returns mean recon metrics; the recon dir is fed to the FID harness."""
     recon_dir.mkdir(parents=True, exist_ok=True)
 
     n, ssim_sum, lpips_sum = 0, 0.0, 0.0
@@ -131,18 +122,17 @@ def reconstruct_set(
         n += b
 
         for j, p in enumerate(chunk):
-            stem = Path(p).stem
-            save_image(xs[j : j + 1].cpu(), in_dir / f"{stem}.png")
-            save_image(recons[j : j + 1].cpu(), recon_dir / f"{stem}.png")
+            save_image(recons[j : j + 1].cpu(), recon_dir / f"{Path(p).stem}.png")
         print(f"  reconstructed {n}/{len(paths)}  "
               f"(running SSIM={ssim_sum / n:.4f}  LPIPS={lpips_sum / n:.4f})")
 
     return {"n": n, "ssim": ssim_sum / max(n, 1), "lpips": lpips_sum / max(n, 1)}
 
 
-# ── floor reference (context only) ──────────────────────────────────────────────────
+# ── reference loaders ───────────────────────────────────────────────────────────────
 
 def load_floor_fid() -> dict | None:
+    """The real-vs-real domain-FID floor from results/floor.json (context only)."""
     p = ROOT / FLOOR_JSON
     if not p.is_file():
         return None
@@ -151,6 +141,30 @@ def load_floor_fid() -> dict | None:
         return {"fid": f["fid"], "upper95": f.get("upper95")}
     except Exception:
         return None
+
+
+def resolve_target(path: str, key: str) -> float:
+    """Read the LDM gen-FID from the S6 result JSON at a dotted `key`.
+
+    Tolerates both the metrics.fid layout ({"fid": {"fid": X, ...}}) and a flat
+    {"fid": X}: if the dotted key lands on the fid sub-dict, descend to its scalar.
+    """
+    p = ROOT / path if not Path(path).is_absolute() else Path(path)
+    if not p.is_file():
+        raise SystemExit(f"--target-from: no such file: {p}")
+    cur = json.loads(p.read_text())
+    for part in key.split("."):
+        if isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        else:
+            cur = None
+            break
+    if isinstance(cur, dict) and isinstance(cur.get("fid"), (int, float)):
+        cur = cur["fid"]
+    if not isinstance(cur, (int, float)):
+        raise SystemExit(f"--target-from: could not resolve a numeric FID from {p} "
+                         f"at key {key!r} (got {cur!r})")
+    return float(cur)
 
 
 # ── gate ────────────────────────────────────────────────────────────────────────────
@@ -167,8 +181,12 @@ def main() -> None:
     p.add_argument("--n", type=int, default=512, help="Cap real images (None=all)")
     p.add_argument("--res", type=int, default=512, help="VAE input resolution")
     p.add_argument("--target-fid", type=float, default=None, dest="target_fid",
-                   help="LDM target gen-FID (xrv domain space). Required for a "
-                        "pass/fail verdict; omit to measure only.")
+                   help="LDM target gen-FID (xrv domain space), supplied inline.")
+    p.add_argument("--target-from", default=None, dest="target_from",
+                   help="Read the target gen-FID from this JSON instead (e.g. "
+                        "results/fid.json from S6). Ignored if --target-fid is given.")
+    p.add_argument("--target-key", default="fid", dest="target_key",
+                   help="Dotted key into --target-from for the gen-FID (default 'fid')")
     p.add_argument("--margin", type=float, default=1.0 / 3.0,
                    help="rFID must be <= target_fid * margin to pass ('≪'; default 1/3)")
     p.add_argument("--kid", action="store_true", help="Also report domain-KID")
@@ -176,7 +194,7 @@ def main() -> None:
     p.add_argument("--batch_size", type=int, default=16, help="VAE recon batch size")
     p.add_argument("--fid_batch_size", type=int, default=32, help="Feature-extract batch")
     p.add_argument("--workdir", default="outputs/rfid_gate",
-                   help="Where input@res / recon@res PNGs are written")
+                   help="Where recon PNGs are written")
     p.add_argument("--device", default=None, help="cpu|cuda (default: auto)")
     p.add_argument("--out", default="results/rfid_gate.json", help="Results JSON")
     args = p.parse_args()
@@ -189,6 +207,13 @@ def main() -> None:
     real_dir = ROOT / args.real if not Path(args.real).is_absolute() else Path(args.real)
     workdir = ROOT / args.workdir if not Path(args.workdir).is_absolute() else Path(args.workdir)
 
+    # Resolve the target up front so a bad --target-from fails before the GPU work.
+    target_fid = args.target_fid
+    target_src = "inline"
+    if target_fid is None and args.target_from is not None:
+        target_fid = resolve_target(args.target_from, args.target_key)
+        target_src = f"{args.target_from}:{args.target_key}"
+
     print(f"Loading VAE: {ckpt_path}")
     model = load_vae(ckpt_path, device)
     step = ckpt_path.stem.replace("vae_step", "")
@@ -197,9 +222,8 @@ def main() -> None:
     print(f"Reconstructing {len(real_paths)} real both-disease images "
           f"from {real_dir} (device={args.device}) ...")
 
-    in_dir, recon_dir = workdir / "input", workdir / "recon"
-    recon = reconstruct_set(model, real_paths, in_dir, recon_dir, device,
-                            args.batch_size, res=args.res)
+    recon_dir = workdir / "recon"
+    recon = reconstruct_set(model, real_paths, recon_dir, device, args.batch_size, res=args.res)
 
     # Free VAE before the feature extractor pulls in the xrv DenseNet.
     del model
@@ -209,13 +233,10 @@ def main() -> None:
     print("\nExtracting xrv (domain) features ...")
     feats_real = extract_features([str(q) for q in real_paths], embed="xrv",
                                   device=args.device, batch_size=args.fid_batch_size)
-    feats_in = extract_features(sorted(str(q) for q in in_dir.glob("*.png")), embed="xrv",
-                                device=args.device, batch_size=args.fid_batch_size)
     feats_recon = extract_features(sorted(str(q) for q in recon_dir.glob("*.png")), embed="xrv",
                                    device=args.device, batch_size=args.fid_batch_size)
 
-    rfid = fid_from_features(feats_real, feats_recon)["fid"]          # headline ceiling
-    rfid_codec = fid_from_features(feats_in, feats_recon)["fid"]      # codec-only (resize removed)
+    rfid = fid_from_features(feats_real, feats_recon)["fid"]   # the codec ceiling
 
     out: dict = {
         "ckpt": str(ckpt_path),
@@ -224,10 +245,10 @@ def main() -> None:
         "n": recon["n"],
         "embed": "xrv",
         "rfid": rfid,
-        "rfid_codec": rfid_codec,
         "ssim": recon["ssim"],
         "lpips": recon["lpips"],
-        "target_fid": args.target_fid,
+        "target_fid": target_fid,
+        "target_src": target_src if target_fid is not None else None,
         "margin": args.margin,
     }
 
@@ -240,31 +261,30 @@ def main() -> None:
         out["floor_fid"] = floor
 
     # ── verdict ──────────────────────────────────────────────────────────────────
-    if args.target_fid is not None:
-        threshold = args.target_fid * args.margin
+    if target_fid is not None:
+        threshold = target_fid * args.margin
         passed = rfid <= threshold
         out["threshold"] = threshold
-        out["ratio_to_target"] = rfid / args.target_fid
+        out["ratio_to_target"] = rfid / target_fid
         out["pass"] = bool(passed)
         out["verdict"] = (
-            f"VAE certified — ships as-is (rFID {rfid:.3f} ≪ target {args.target_fid:.3f})"
+            f"VAE certified — ships as-is (rFID {rfid:.3f} ≪ target {target_fid:.3f})"
             if passed else
-            f"GATE FAILED (rFID {rfid:.3f} > {args.margin:.2f}×target {args.target_fid:.3f} "
+            f"GATE FAILED (rFID {rfid:.3f} > {args.margin:.2f}×target {target_fid:.3f} "
             f"= {threshold:.3f}) — run the conditional fine-tune"
         )
     else:
         out["pass"] = None
-        out["verdict"] = "indeterminate — pass --target-fid for a pass/fail decision"
+        out["verdict"] = "indeterminate — pass --target-fid or --target-from for a verdict"
 
     # ── report ───────────────────────────────────────────────────────────────────
     print(f"\n── rFID CEILING CHECK (vae_step {step}, n={recon['n']}, xrv domain space)")
-    print(f"   rFID        = {rfid:.4f}   (real originals → recon; the ceiling)")
-    print(f"   rFID_codec  = {rfid_codec:.4f}   (input@{args.res} → recon; resize removed)")
-    print(f"   SSIM        = {recon['ssim']:.4f}   LPIPS = {recon['lpips']:.4f}")
+    print(f"   rFID   = {rfid:.4f}   (real originals → recon; the codec ceiling)")
+    print(f"   SSIM   = {recon['ssim']:.4f}   LPIPS = {recon['lpips']:.4f}")
     if floor is not None:
-        print(f"   floor.fid   = {floor['fid']:.4f}   (real-vs-real noise floor — rFID sits above this)")
+        print(f"   floor  = {floor['fid']:.4f}   (real-vs-real noise floor — rFID sits above this)")
     if "rkid" in out:
-        print(f"   rKID        = {out['rkid']['kid']:+.5f} ± {out['rkid']['kid_std']:.5f}")
+        print(f"   rKID   = {out['rkid']['kid']:+.5f} ± {out['rkid']['kid_std']:.5f}")
     print(f"\n   {out['verdict']}")
 
     out_path = ROOT / args.out if not Path(args.out).is_absolute() else Path(args.out)
@@ -272,7 +292,7 @@ def main() -> None:
     out_path.write_text(json.dumps(out, indent=2))
     print(f"\nResults → {out_path}")
 
-    if args.target_fid is not None and not out["pass"]:
+    if target_fid is not None and not out["pass"]:
         sys.exit(1)   # non-zero exit so a watcher/CI can branch to the fine-tune task
 
 
