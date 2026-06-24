@@ -28,11 +28,11 @@ S0  KICKOFF                                                        [blocks every
 | # | Step | Track | Scope it lives in | Runs in parallel with | Status |
 |---|------|-------|-------------------|------------------------|--------|
 | S0 | Kickoff: hippo env up, checkpoints loaded, W&B live | — | (ops) | — | ⬜ |
-| S1 | VAE certification: rFID gate → keep or fine-tune | A | `plans/00-vae` | S4 | 🔄 measured (rFID=1.81), pending S6 gen-FID for stamp |
-| S2 | Treatment-LDM continuation; save checkpoints often | A | `plans/01-single-disease-ldm` | all of Track B | ⬜ |
-| S4 | Metrics harness (FID + C2ST + both-present) + checkpoint-watcher + Grad-CAM fix + leakage harness | B | `plans/06-metrics-extractors` | S1, S2 | ⬜ |
+| S1 | VAE certification: rFID gate → keep or fine-tune | A | `plans/00-vae` | S4 | 🔄 stamped PASS @40k (rFID 1.81 ≪ 7.11); provisional—flips if gen-FID<5.4 |
+| S2 | Treatment-LDM continuation; save checkpoints often | A | `plans/01-single-disease-ldm` | all of Track B | 🔄 ✓100k steps converged/plateaued (W&B hifei736); no ckpt beats 40k (val flat)—selection pending |
+| S4 | Metrics harness (FID + C2ST + both-present) + checkpoint-watcher + Grad-CAM fix + leakage harness | B | `plans/06-metrics-extractors` | S1, S2 | 🔄 watcher built+ran (compose→FID→stamp→index); eval C2ST/both-present/Grad-CAM/W&B = TODO |
 | S5 | Blinded radiologist present/absent labels | B | `plans/06-metrics-extractors` (07-visual-leakage) | everything — **start day 0** | ⬜ |
-| S6 | Composition evaluation: both-present rate + CIs [N1]; overlay baseline + FID [N2] | B | `plans/07-composition-experiments` | S2, S7 | ⬜ |
+| S6 | Composition evaluation: both-present rate + CIs [N1]; overlay baseline + FID [N2] | B | `plans/07-composition-experiments` | S2, S7 | 🔄 N1 (both-present vs real ref)=headline per abstract; N2/FID sanity-only & FAILS (overlay<compose ×3)—don't lead w/ FID |
 | S7 | Augmentation-utility experiment (PoE images → classifier AUC lift) | B | `plans/09-augmentation-utility` (new) | S6 | ⬜ |
 | S8 | Paper writing from the figure map, placeholders filled as figures land | B | `plans/08-documentation` + `paper/` | all | ⬜ |
 | S9 | Freeze best checkpoint → regenerate all figures → verify hypothesis → polish | — | `plans/08-documentation` | — | ⬜ |
