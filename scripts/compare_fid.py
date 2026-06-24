@@ -56,6 +56,9 @@ def main() -> None:
     )
     p.add_argument("--set", action="append", default=[], dest="sets", metavar="LABEL=PATH",
                    help="A labelled FID JSON, e.g. 'PoE compose=results/fid.json'. Repeatable.")
+    p.add_argument("--present", action="append", default=[], dest="present", metavar="LABEL=PATH",
+                   help="Optional both-present JSON (presence_classifier --mode joint) for a set, "
+                        "matched by LABEL, e.g. 'PoE compose=results/compose_joint.json'. Repeatable.")
     p.add_argument("--floor", default=None, help="results/floor.json for the noise-floor row")
     p.add_argument("--out", default=None, help="Write the collated comparison JSON here")
     args = p.parse_args()
@@ -63,12 +66,22 @@ def main() -> None:
     if len(args.sets) < 1:
         raise SystemExit("pass at least one --set 'label=path.json' (usually two: compose + overlay)")
 
+    # optional both-present (co_presence_rate) per set, matched by label
+    present: dict[str, float] = {}
+    for spec in args.present:
+        if "=" not in spec:
+            raise SystemExit(f"--present must be LABEL=PATH (got {spec!r})")
+        label, path = spec.split("=", 1)
+        present[label.strip()] = _read(path.strip()).get("co_presence_rate")
+
     rows = []
     for spec in args.sets:
         if "=" not in spec:
             raise SystemExit(f"--set must be LABEL=PATH (got {spec!r})")
         label, path = spec.split("=", 1)
-        rows.append(_extract(label.strip(), path.strip()))
+        r = _extract(label.strip(), path.strip())
+        r["both_present"] = present.get(label.strip())
+        rows.append(r)
 
     floor_fid = None
     if args.floor:
@@ -77,9 +90,13 @@ def main() -> None:
     # sort by FID ascending (most realistic first); None sinks to the bottom
     rows.sort(key=lambda r: (r["fid"] is None, r["fid"]))
 
+    show_present = any(r.get("both_present") is not None for r in rows)
+    bp_hdr = f"   {'both%':>6}" if show_present else ""
+    width = 72 + (9 if show_present else 0)
+
     # ── table ────────────────────────────────────────────────────────────────────
-    print(f"\n{'Set':<22}{'FID ↓':>10}   {'KID ± std':>20}   {'n':>5}   embed")
-    print("─" * 72)
+    print(f"\n{'Set':<22}{'FID ↓':>10}   {'KID ± std':>20}{bp_hdr}   {'n':>5}   embed")
+    print("─" * width)
     for r in rows:
         fid = f"{r['fid']:.3f}" if isinstance(r["fid"], (int, float)) else "—"
         if isinstance(r["kid"], (int, float)):
@@ -88,10 +105,15 @@ def main() -> None:
         else:
             kid = "—"
         n = r["n"] if r["n"] is not None else "—"
-        print(f"{r['label']:<22}{fid:>10}   {kid:>20}   {str(n):>5}   {r['embed'] or '—'}")
+        bp = ""
+        if show_present:
+            bp = (f"   {r['both_present'] * 100:>5.1f}%" if isinstance(r.get("both_present"), (int, float))
+                  else f"   {'—':>6}")
+        print(f"{r['label']:<22}{fid:>10}   {kid:>20}{bp}   {str(n):>5}   {r['embed'] or '—'}")
     if isinstance(floor_fid, (int, float)):
-        print(f"{'(real-vs-real floor)':<22}{floor_fid:>10.3f}   {'—':>20}   {'—':>5}   —")
-    print("─" * 72)
+        bp = f"   {'—':>6}" if show_present else ""
+        print(f"{'(real-vs-real floor)':<22}{floor_fid:>10.3f}   {'—':>20}{bp}   {'—':>5}   —")
+    print("─" * width)
 
     # ── fairness guards ──────────────────────────────────────────────────────────
     ns = {r["n"] for r in rows if r["n"] is not None}
@@ -112,7 +134,17 @@ def main() -> None:
                    f"({factor:.1f}× lower) → more realistic.")
         print(f"\n{verdict}")
         if isinstance(floor_fid, (int, float)) and best["fid"] <= floor_fid:
-            print("⚠️  best FID is at/under the floor — suspiciously low; check the sets.")
+            print("⚠️  best FID is at/under the floor — suspiciously low; check the sets "
+                  "(a real-pixel overlay sits at the floor and can't be beaten on FID — "
+                  "use a generator-controlled overlay).")
+        if show_present:
+            bps = {r["label"]: r.get("both_present") for r in rows if isinstance(r.get("both_present"), (int, float))}
+            if bps:
+                print("both-present rate (both diseases detected): "
+                      + ", ".join(f"{k} {v*100:.1f}%" for k, v in bps.items()))
+                print("  note: FID rewards pixel realism; both-present rate is whether the diseases "
+                      "are actually there. An overlay can score high on BOTH yet be anatomically "
+                      "incoherent — that gap is what C2ST / blinded labels catch.")
     elif len(scored) == 1:
         print(f"\nonly one scored set ({scored[0]['label']} FID={scored[0]['fid']:.3f}); "
               f"add the other --set to compare.")
