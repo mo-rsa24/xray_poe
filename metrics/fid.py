@@ -252,9 +252,13 @@ def _gather_paths(dir_path: str | Path, n: int | None, seed: int = 42) -> list[P
             f"(the spec's `real/`, `noise/`, `real_both/` are placeholders — "
             f"point --a/--b at actual image dirs, e.g. data/nih/images_both)"
         )
-    paths = sorted(dir_path.glob("*.png")) + sorted(dir_path.glob("*.jpg"))
+    exts = ("*.png", "*.jpg", "*.jpeg")
+    paths = sorted(p for ext in exts for p in dir_path.glob(ext))
     if not paths:
-        raise RuntimeError(f"No PNG/JPG images in {dir_path}")
+        # fall back to a recursive search (compose outputs nest by config, e.g. <dir>/w1p0/)
+        paths = sorted(p for ext in exts for p in dir_path.rglob(ext))
+    if not paths:
+        raise RuntimeError(f"No PNG/JPG images in {dir_path} (searched recursively)")
     if n is not None and n < len(paths):
         rng = random.Random(seed)
         paths = sorted(rng.sample(paths, n))

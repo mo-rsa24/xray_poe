@@ -61,12 +61,34 @@ class LatentDataset(Dataset):
         label = torch.tensor(d["label"], dtype=torch.long)
         return z, label
 
-    def make_sampler(self, effusion_weight: float = 2.0) -> WeightedRandomSampler:
-        """Weighted sampler that up-samples effusion to compensate for class imbalance."""
-        weights = [
-            effusion_weight if lbl == _LABEL_EFFUSION else 1.0
-            for lbl in self._labels
-        ]
+    def make_sampler(
+        self,
+        effusion_weight: float = 2.0,
+        balance_classes: bool = False,
+        class_mult: dict[int, float] | None = None,
+    ) -> WeightedRandomSampler:
+        """Weighted sampler for class balance.
+
+        Two modes:
+          • legacy (balance_classes=False): per-sample weight = effusion_weight for
+            effusion, 1.0 otherwise. Combined with the raw 7:1 effusion:cardio count
+            this starves cardiomegaly (~6% of batches) — see ldm_full.yaml history.
+          • balanced (balance_classes=True): inverse-frequency weighting so the
+            SAMPLED proportion of each class equals its class_mult share (normalised).
+            class_mult={0:0.25, 1:0.40, 2:0.35} → 25% normal / 40% cardio / 35% effusion
+            regardless of raw counts. Default (class_mult=None) → equal thirds.
+        """
+        if balance_classes:
+            from collections import Counter
+
+            counts = Counter(self._labels)
+            mult = class_mult or {}
+            weights = [mult.get(lbl, 1.0) / counts[lbl] for lbl in self._labels]
+        else:
+            weights = [
+                effusion_weight if lbl == _LABEL_EFFUSION else 1.0
+                for lbl in self._labels
+            ]
         return WeightedRandomSampler(
             weights=weights,
             num_samples=len(weights),

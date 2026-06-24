@@ -731,7 +731,11 @@ def main() -> None:
         train_loader = torch.utils.data.DataLoader(
             train_ds,
             batch_size=cfg.get("batch_size", 4),
-            sampler=train_ds.make_sampler(effusion_weight=cfg.get("effusion_weight", 2.0)),
+            sampler=train_ds.make_sampler(
+                effusion_weight=cfg.get("effusion_weight", 2.0),
+                balance_classes=cfg.get("balance_classes", False),
+                class_mult=cfg.get("class_mult"),
+            ),
             num_workers=4, pin_memory=True, drop_last=True, persistent_workers=True,
         )
         val_loader = torch.utils.data.DataLoader(
@@ -784,7 +788,11 @@ def main() -> None:
         train_loader = torch.utils.data.DataLoader(
             train_ds,
             batch_size=cfg.get("batch_size", 4),
-            sampler=train_ds.make_sampler(effusion_weight=cfg.get("effusion_weight", 2.0)),
+            sampler=train_ds.make_sampler(
+                effusion_weight=cfg.get("effusion_weight", 2.0),
+                balance_classes=cfg.get("balance_classes", False),
+                class_mult=cfg.get("class_mult"),
+            ),
             num_workers=4, pin_memory=True, drop_last=True, persistent_workers=True,
         )
         val_loader = torch.utils.data.DataLoader(

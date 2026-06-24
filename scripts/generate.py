@@ -103,6 +103,36 @@ def _save_images(imgs: list[Image.Image], out_dir: Path) -> None:
     _console.log(f"  [green]Saved {len(imgs)} images[/green] → [dim]{out_dir}[/dim]")
 
 
+def _write_manifest(out_dir: Path, args: argparse.Namespace, **extra) -> None:
+    """Stamp provenance next to the generated images so a set is never orphaned again."""
+    import hashlib
+    import json
+    import subprocess
+
+    ckpt = Path(args.ckpt)
+    sha = hashlib.sha256(ckpt.read_bytes()).hexdigest()[:16]
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=Path(__file__).parent.parent
+        ).decode().strip()
+    except Exception:
+        commit = None
+    manifest = {
+        "ckpt": str(args.ckpt),
+        "ckpt_sha256_16": sha,
+        "vae_ckpt": str(args.vae_ckpt),
+        "anchor": args.anchor,
+        "n": args.n,
+        "seed": args.seed,
+        "steps": args.steps,
+        "git_commit": commit,
+        **extra,
+    }
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "MANIFEST.json").write_text(json.dumps(manifest, indent=2))
+    _console.log(f"  [dim]Manifest → {out_dir / 'MANIFEST.json'}[/dim]")
+
+
 def _noise_batch(n: int, seed: int, device: torch.device) -> torch.Tensor:
     tensors = []
     for i in range(n):
@@ -179,7 +209,11 @@ def parse_args() -> argparse.Namespace:
 
     p.add_argument("--w", type=float, default=1.0, help="CFG weight for --disease mode")
     p.add_argument("--w-sweep", nargs="+", type=float, default=[1.0],
-                   help="CFG weight(s) for --compose mode")
+                   help="CFG weight(s) for --compose mode — sweeps the CARDIO weight")
+    p.add_argument("--w-effusion", type=float, default=None,
+                   help="Fixed effusion weight for --compose mode (default: equal to each "
+                        "--w-sweep value, i.e. symmetric). Set < the cardio weight to break "
+                        "effusion's dominance over cardiomegaly.")
     p.add_argument("--anchor", choices=["null", "normal"], default="null",
                    help="Unconditional anchor: null token or no-finding class")
 
@@ -246,25 +280,33 @@ def main() -> None:
             f"  gen_batch={args.gen_batch_size}"
         )
         for w in args.w_sweep:
-            _console.log(f"  w=[cyan]{w}[/cyan]  generating {args.n} images…")
+            w_eff = w if args.w_effusion is None else args.w_effusion
+            _console.log(f"  w_cardio=[cyan]{w}[/cyan] w_effusion=[cyan]{w_eff}[/cyan]"
+                         f"  generating {args.n} images…")
             all_imgs = []
             t0 = time.perf_counter()
             for start in range(0, args.n, args.gen_batch_size):
                 batch_n = min(args.gen_batch_size, args.n - start)
                 noise = _noise_batch(batch_n, args.seed + start, device)
-                label = f"PoE w={w} [{start+1}–{start+batch_n}/{args.n}]"
+                label = f"PoE wc={w} we={w_eff} [{start+1}–{start+batch_n}/{args.n}]"
                 prog, task_id = _make_ddim_progress(label, args.steps)
                 with prog:
                     z0 = cfg_compose(
                         unet, noise, w, ddim,
                         steps=args.steps, anchor=args.anchor, null_token_idx=null_token_idx,
+                        w_effusion=args.w_effusion,
                         step_callback=lambda i, _: prog.update(task_id, completed=i),
                     )
                 all_imgs.extend(_decode_latents(z0, vae, scale_factor))
             dt = time.perf_counter() - t0
             _console.log(f"  [dim]Done  {args.n} images  [{dt:.1f}s][/dim]")
+            # asymmetric runs get a distinct dir so a sweep never collides
             w_str = f"{w:.1f}".replace(".", "p")
-            _save_images(all_imgs, out_root / "compose" / f"w{w_str}")
+            dir_name = f"w{w_str}" if args.w_effusion is None \
+                else f"wc{w_str}_we{f'{w_eff:.1f}'.replace('.', 'p')}"
+            out_dir = out_root / "compose" / dir_name
+            _save_images(all_imgs, out_dir)
+            _write_manifest(out_dir, args, w_cardio=w, w_effusion=w_eff)
 
     _console.print("\n[bold green]Done.[/bold green]")
 

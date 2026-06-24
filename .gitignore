@@ -7,6 +7,7 @@ logs/
 figures/
 runs/
 plans/
+plans_v1_archive/
 briefs/
 paper/
 # Python
@@ -16,10 +17,10 @@ __pycache__/
 .eggs/
 dist/
 build/
-illuminate-output/
-outputs/
-todoist/
-plans/
+# illuminate-output/
+# outputs/
+# todoist/
+# plans/
 *.so
 
 # Jupyter

@@ -9,6 +9,7 @@ cfg_dropout_p: 0.15
 bf16: true
 max_steps: 100000
 ckpt_every: 10000
+ckpt_dir: ckpts          # step-40000 checkpoint lives here, not the ckpts/ldm default
 seed: 42
 
 # Class-balance overrides

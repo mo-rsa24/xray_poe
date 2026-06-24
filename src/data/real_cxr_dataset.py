@@ -151,12 +151,27 @@ class RealCXRDataset(Dataset):
                 continue
         raise RuntimeError(f"RealCXRDataset: could not load any image near idx={idx}")
 
-    def make_sampler(self, effusion_weight: float = 2.0) -> WeightedRandomSampler:
-        """Weighted sampler that up-samples effusion to compensate for class imbalance."""
-        weights = [
-            effusion_weight if lbl == _LABEL_EFFUSION else 1.0
-            for _, lbl in self._samples
-        ]
+    def make_sampler(
+        self,
+        effusion_weight: float = 2.0,
+        balance_classes: bool = False,
+        class_mult: dict[int, float] | None = None,
+    ) -> WeightedRandomSampler:
+        """Weighted sampler for class balance. See LatentDataset.make_sampler for the
+        full contract; balanced mode makes the sampled proportion of each class equal
+        its class_mult share (normalised), independent of raw counts."""
+        labels = [lbl for _, lbl in self._samples]
+        if balance_classes:
+            from collections import Counter
+
+            counts = Counter(labels)
+            mult = class_mult or {}
+            weights = [mult.get(lbl, 1.0) / counts[lbl] for lbl in labels]
+        else:
+            weights = [
+                effusion_weight if lbl == _LABEL_EFFUSION else 1.0
+                for lbl in labels
+            ]
         return WeightedRandomSampler(
             weights=weights,
             num_samples=len(weights),

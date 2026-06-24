@@ -119,11 +119,16 @@ def cfg_compose(
     effusion_idx: int = _EFFUSION_IDX,
     nf_idx: int = _NF_IDX,
     step_callback: Callable[[int, int], None] | None = None,
+    w_effusion: float | None = None,
 ) -> torch.Tensor:
     """PoE compositional denoising — generates co-morbid (cardio + effusion) latents.
 
     Formula applied at each DDIM step:
-        ε_composed = ε_anchor + w*(ε_cardio − ε_anchor) + w*(ε_effusion − ε_anchor)
+        ε_composed = ε_anchor + w*(ε_cardio − ε_anchor) + w_eff*(ε_effusion − ε_anchor)
+
+    where w_eff = w_effusion if given, else w (symmetric — preserves the original
+    single-weight behaviour for all existing callers).  Set w_effusion < w to break
+    effusion's dominance over cardiomegaly in the composed product.
 
     anchor='null'   — ε_anchor = ε(z, ∅)   using null token index.
     anchor='normal' — ε_anchor = ε(z, class_0)  using no-finding label.
@@ -152,6 +157,7 @@ def cfg_compose(
     ddim_scheduler.set_timesteps(steps)
     device = noise.device
     n = noise.shape[0]
+    w_eff = w if w_effusion is None else w_effusion
 
     anchor_idx = null_token_idx if anchor == "null" else nf_idx
     label_anchor = torch.full((n,), anchor_idx, device=device, dtype=torch.long)
@@ -170,8 +176,8 @@ def cfg_compose(
         eps_cardio = unet(z, t_batch, label_cardio)
         eps_effusion = unet(z, t_batch, label_effusion)
 
-        # PoE: ε_a + w·(ε_cardio − ε_a) + w·(ε_effusion − ε_a)
-        eps = eps_anchor + w * (eps_cardio - eps_anchor) + w * (eps_effusion - eps_anchor)
+        # PoE: ε_a + w·(ε_cardio − ε_a) + w_eff·(ε_effusion − ε_a)
+        eps = eps_anchor + w * (eps_cardio - eps_anchor) + w_eff * (eps_effusion - eps_anchor)
 
         z = ddim_scheduler.step(eps, t, z).prev_sample
         if step_callback is not None:
