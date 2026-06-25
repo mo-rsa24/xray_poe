@@ -34,13 +34,48 @@ from pathlib import Path
 import numpy as np
 import torch
 import torchxrayvision as xrv
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 HEART = "Heart"
 LLUNG = "Left Lung"
 RLUNG = "Right Lung"
 _PARTITION = "data/nih/partition.parquet"
 _FULL_IMAGES = "data/nih/images"
+
+# ── calibrated decision thresholds ───────────────────────────────────────────────
+# Validated by researcher visual sign-off on the Exp01 failure sheets (2026-06-25);
+# the support verdict is robust to ±0.05 / ±10° perturbation (see calibration.md).
+TAU_OPACITY = 0.55        # peri-cardiac opacity ≥ this → cardiac border erased
+TAU_HEART_CONF = 0.45     # PSPNet mean heart-mask confidence floor
+CP_BLUNT_DEG = 80.0       # costophrenic wedge angle > this → blunted
+CP_SEV_BINS = (60.0, 90.0, 120.0)   # sharp | mild | moderate | severe
+
+_FONT_CACHE: dict[int, ImageFont.ImageFont] = {}
+
+
+def _font(size: int) -> ImageFont.ImageFont:
+    """A legible bold TrueType font (DejaVuSans-Bold), cached by size; falls back
+    to PIL's bitmap default only if no TTF is found."""
+    if size in _FONT_CACHE:
+        return _FONT_CACHE[size]
+    import glob
+    try:
+        import matplotlib
+        mpl = str(Path(matplotlib.get_data_path()) / "fonts" / "ttf" / "DejaVuSans-Bold.ttf")
+    except Exception:
+        mpl = ""
+    for p in ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", mpl,
+              *glob.glob("/usr/share/fonts/**/DejaVuSans-Bold.ttf", recursive=True)]:
+        if p and Path(p).exists():
+            try:
+                f = ImageFont.truetype(p, size)
+                _FONT_CACHE[size] = f
+                return f
+            except Exception:
+                pass
+    f = ImageFont.load_default()
+    _FONT_CACHE[size] = f
+    return f
 
 
 # ── segmentation ───────────────────────────────────────────────────────────────
@@ -75,6 +110,83 @@ def _max_width(mask: np.ndarray) -> tuple[int, int, int, int]:
     return best
 
 
+# ── costophrenic-angle read (effusion instrument) ────────────────────────────────
+
+def _cp_read(lung: np.ndarray, r: int = 28, n_ang: int = 360) -> dict:
+    """Costophrenic-angle read off a SINGLE lung mask (geometric, mask-only).
+
+    Locates the inferolateral vertex (the costophrenic recess — down + away from
+    the image midline), then measures the wedge of lung subtended on a circle of
+    radius ``r`` about that vertex. A sharp CP angle subtends a narrow wedge;
+    pleural fluid fills/rounds the recess → a wider wedge. ``angle_deg`` is that
+    wedge in degrees (frac-of-circle-inside-lung × 360).
+
+    Thresholds here are PROVISIONAL — the hand-calibration task tightens them.
+    """
+    ys, xs = np.where(lung)
+    if len(ys) < 50:
+        return {"angle_deg": float("nan"), "blunted": None, "severity": "n/a", "vertex": None}
+    H, W = lung.shape
+    cx = float(xs.mean())
+    score = (ys - xs) if cx < W / 2 else (ys + xs)   # bottom-outer corner
+    k = int(np.argmax(score))
+    xv, yv = int(xs[k]), int(ys[k])
+    ang = np.linspace(0, 2 * np.pi, n_ang, endpoint=False)
+    px = np.clip((xv + r * np.cos(ang)).astype(int), 0, W - 1)
+    py = np.clip((yv + r * np.sin(ang)).astype(int), 0, H - 1)
+    angle_deg = float(lung[py, px].mean() * 360.0)
+    b1, b2, b3 = CP_SEV_BINS
+    if   angle_deg < b1: sev = "sharp"
+    elif angle_deg < b2: sev = "mild"
+    elif angle_deg < b3: sev = "moderate"
+    else:                sev = "severe"
+    return {"angle_deg": round(angle_deg, 1), "blunted": bool(angle_deg > CP_BLUNT_DEG),
+            "severity": sev, "vertex": [xv, yv], "radius": r}
+
+
+def _peri_cardiac_opacity(gray: np.ndarray, heart: np.ndarray, lungs: np.ndarray) -> float:
+    """Whiteness immediately lateral to the heart, normalized to THIS film's own
+    references. Aerated lung is dark on a CXR; pleural fluid is bright.
+
+        dark   = 20th-pctile intensity inside the lung masks (aerated baseline)
+        bright = median intensity inside the heart mask (solid-tissue baseline)
+        opacity = (mean band intensity − dark) / (bright − dark)   clipped to [0,1]
+
+    ~0 → crisp cardiac border (dark lung abuts the heart, CTR measurable);
+    ~1 → whiteout (the band is as bright as the heart → silhouette sign, the
+    cardiac border is erased and CTR is not trustworthy). This is the operational
+    "lots of whiteness around the heart" → entangled signal.
+    """
+    rows = np.where(heart.any(axis=1))[0]
+    if len(rows) == 0 or not lungs.any():
+        return float("nan")
+    W = gray.shape[1]
+    band = []
+    for y in rows:
+        xs = np.where(heart[y])[0]
+        xl, xr = int(xs[0]), int(xs[-1])
+        band.append(gray[y, max(0, xl - 25):max(0, xl - 3)])
+        band.append(gray[y, min(W, xr + 3):min(W, xr + 25)])
+    band = np.concatenate([b for b in band if b.size]) if any(b.size for b in band) else np.array([])
+    if band.size < 20:
+        return float("nan")
+    dark = float(np.percentile(gray[lungs], 20))
+    bright = float(np.median(gray[heart]))
+    if bright - dark < 1:
+        return float("nan")
+    return float(np.clip((float(band.mean()) - dark) / (bright - dark), 0.0, 1.0))
+
+
+def _border_visible(opacity: float, heart_conf: float,
+                    tau_op: float = TAU_OPACITY, tau_conf: float = TAU_HEART_CONF) -> bool:
+    """Gate-0: is the cardiac border traceable (CTR measurable)? True when the
+    peri-cardiac band is NOT whited-out and PSPNet is confident about the heart.
+    Thresholds PROVISIONAL — tightened in the hand-calibration task."""
+    if not np.isfinite(opacity):
+        return False
+    return bool(opacity < tau_op and heart_conf >= tau_conf)
+
+
 # ── CTR per image ────────────────────────────────────────────────────────────────
 
 def ctr_for_image(seg, idx, path: Path, device: str) -> dict:
@@ -82,17 +194,37 @@ def ctr_for_image(seg, idx, path: Path, device: str) -> dict:
         logits = seg(_to_input(path, device))
         probs = torch.sigmoid(logits)[0].cpu().numpy()     # (n_targets, 512, 512)
     heart = _mask(probs[idx[HEART]])
-    lungs = _mask(probs[idx[LLUNG]]) | _mask(probs[idx[RLUNG]])
+    llung, rlung = _mask(probs[idx[LLUNG]]), _mask(probs[idx[RLUNG]])
+    lungs = llung | rlung
+    gray = np.asarray(Image.open(path).convert("L").resize((512, 512)), dtype=np.float32)
     if not heart.any() or not lungs.any():
-        return {"ctr": float("nan"), "heart_w": 0, "thorax_w": 0, "ok": False}
+        return {"ctr": float("nan"), "heart_w": 0, "thorax_w": 0, "ok": False,
+                "heart_conf": 0.0, "peri_cardiac_opacity": float("nan"),
+                "border_visible": False,
+                "cp_left": _cp_read(llung), "cp_right": _cp_read(rlung)}
     hw, hy, hx0, hx1 = _max_width(heart)
     tw, ty, tx0, tx1 = _max_width(lungs)
+    heart_conf = float(probs[idx[HEART]][heart].mean())
+    opacity = _peri_cardiac_opacity(gray, heart, lungs)
     return {
         "ctr": float(hw / tw) if tw else float("nan"),
         "heart_w": hw, "thorax_w": tw, "ok": True,
+        "heart_conf": round(heart_conf, 3),
+        "peri_cardiac_opacity": round(opacity, 3) if np.isfinite(opacity) else float("nan"),
+        "border_visible": _border_visible(opacity, heart_conf),
+        "cp_left": _cp_read(llung), "cp_right": _cp_read(rlung),
         "heart_line": [hx0, hy, hx1, hy],
         "thorax_line": [tx0, ty, tx1, ty],
     }
+
+
+def _cp_marker(d: ImageDraw.ImageDraw, cp: dict) -> None:
+    if not cp or cp.get("vertex") is None:
+        return
+    x, y = cp["vertex"]
+    r = cp.get("radius", 28)
+    col = (255, 140, 0) if cp.get("blunted") else (60, 230, 120)  # orange=blunted, green=sharp
+    d.ellipse([x - r, y - r, x + r, y + r], outline=col, width=3)
 
 
 def _overlay(path: Path, m: dict) -> Image.Image:
@@ -101,18 +233,29 @@ def _overlay(path: Path, m: dict) -> Image.Image:
     if m["ok"]:
         d.line(m["heart_line"], fill=(255, 60, 60), width=4)     # heart width (red)
         d.line(m["thorax_line"], fill=(60, 160, 255), width=4)   # thorax width (blue)
-    d.rectangle([0, 496, 512, 512], fill=(0, 0, 0))
-    d.text((4, 498), f"{path.name[:22]}  CTR={m['ctr']:.3f}", fill=(255, 255, 0))
+    _cp_marker(d, m.get("cp_left"))                              # CP recesses (green/orange)
+    _cp_marker(d, m.get("cp_right"))
+    bv = "Y" if m.get("border_visible") else "N"
+    cl, cr = m.get("cp_left", {}), m.get("cp_right", {})
+    _sev = {"sharp": "S", "mild": "M", "moderate": "Mo", "severe": "Sv", "n/a": "-"}
+    def _cp(c): return f"{c.get('angle_deg')}({_sev.get(c.get('severity'), '?')})"
+    line1 = f"{path.name[:16]}  CTR={m['ctr']:.3f}  border={bv}"
+    line2 = f"opac={m.get('peri_cardiac_opacity')}  CP L={_cp(cl)} R={_cp(cr)}"
+    fnt = _font(20)
+    d.rectangle([0, 512 - 62, 512, 512], fill=(0, 0, 0))          # taller label band
+    d.text((6, 512 - 58), line1, fill=(255, 235, 0), font=fnt)
+    d.text((6, 512 - 30), line2, fill=(255, 235, 0), font=fnt)
     return im
 
 
-def _grid(cells: list[Image.Image], cols: int = 4, cell: int = 256) -> Image.Image:
+def _grid(cells: list[Image.Image], cols: int = 4, cell: int = 512) -> Image.Image:
     rows = (len(cells) + cols - 1) // cols
-    g = 4
+    g = 6
     canvas = Image.new("RGB", (cols * cell + (cols + 1) * g, rows * cell + (rows + 1) * g), (24, 24, 24))
     for i, im in enumerate(cells):
         r, c = divmod(i, cols)
-        canvas.paste(im.resize((cell, cell)), (g + c * (cell + g), g + r * (cell + g)))
+        tile = im if im.size == (cell, cell) else im.resize((cell, cell), Image.LANCZOS)
+        canvas.paste(tile, (g + c * (cell + g), g + r * (cell + g)))
     return canvas
 
 
@@ -151,12 +294,29 @@ def main() -> None:
     p.add_argument("--out-json", default="results/ctr_calibration.json")
     p.add_argument("--out-fig", default=None)
     p.add_argument("--fig-n", type=int, default=12, help="example overlays per group in the fig")
+    p.add_argument("--film", default=None, help="single-film mode: path to one PA image")
+    p.add_argument("--out-overlay", default=None, help="single-film mode: overlay PNG path")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--seed", type=int, default=42)
     args = p.parse_args()
 
     seg, idx = _load_seg(args.device)
     print(f"PSPNet loaded on {args.device}; heart idx={idx[HEART]}")
+
+    if args.film:                                              # single-film sanity mode
+        m = ctr_for_image(seg, idx, Path(args.film), args.device)
+        cl, cr = m.get("cp_left", {}), m.get("cp_right", {})
+        print(f"\nfilm = {args.film}")
+        print(f"CTR            = {m['ctr']:.3f}" if np.isfinite(m['ctr']) else "CTR            = NaN (seg failed)")
+        print(f"border_visible = {m.get('border_visible')}  (heart_conf={m.get('heart_conf')}, "
+              f"peri_cardiac_opacity={m.get('peri_cardiac_opacity')})")
+        print(f"CP_blunted_left  = {cl.get('blunted')}  (angle={cl.get('angle_deg')}°, {cl.get('severity')})")
+        print(f"CP_blunted_right = {cr.get('blunted')}  (angle={cr.get('angle_deg')}°, {cr.get('severity')})")
+        if args.out_overlay:
+            Path(args.out_overlay).parent.mkdir(parents=True, exist_ok=True)
+            _overlay(Path(args.film), m).save(args.out_overlay)
+            print(f"overlay → {args.out_overlay}")
+        return
 
     specs = []
     for g in args.group:
