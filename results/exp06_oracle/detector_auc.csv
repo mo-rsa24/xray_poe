@@ -1,0 +1,2 @@
+arm,both_n,seed,ckpt,auc_cardio_overall,auc_effusion_overall,auc_cardio_normal,auc_effusion_normal,auc_cardio_cardio_only,auc_effusion_cardio_only,auc_cardio_effusion_only,auc_effusion_effusion_only,auc_cardio_both_separable,auc_effusion_both_separable
+oracle,all,1,ckpts/detector_ctr_labels.pt,0.8743777239709443,0.900621349282074,,,,,,,0.7114244451200974,0.7593934911242602

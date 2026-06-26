@@ -1,0 +1,4 @@
+arm,both_n,seed,ckpt,auc_cardio_overall,auc_effusion_overall,auc_cardio_normal,auc_effusion_normal,auc_cardio_cardio_only,auc_effusion_cardio_only,auc_cardio_effusion_only,auc_effusion_effusion_only,auc_cardio_both_separable,auc_effusion_both_separable
+starved50,50,1,ckpts/starved_classifier_s01.pt,0.8750750605326877,0.9005701519629518,,,,,,,0.7207737914259652,0.7658284023668639
+starved50,50,2,ckpts/starved_classifier_s02.pt,0.8741476997578692,0.9042354145819274,,,,,,,0.7154530252356339,0.7785502958579881
+starved50,50,3,ckpts/starved_classifier_s03.pt,0.8783026634382567,0.902206139023993,,,,,,,0.7514062024931589,0.7782544378698225
