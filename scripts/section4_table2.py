@@ -40,9 +40,18 @@ def _load(prefix):
     return base
 
 
-def _auc(df, head):
-    s = df[df.stratum == STRATUM]
+def _auc(df, head, stratum=STRATUM):
+    s = df if stratum is None else df[df.stratum == stratum]
     return roc_auc_score(s[head], s[f"{head}_prob"]) if s[head].nunique() == 2 else float("nan")
+
+
+def _delta_overall(arm, base, head):
+    """ΔAUC across ALL strata (general improvement) — contrast for point 2."""
+    m = arm.merge(base, on="Image Index", suffixes=("_a", "_b"))
+    y = m[f"{head}_a"].values
+    if len(np.unique(y)) < 2:
+        return float("nan")
+    return roc_auc_score(y, m[f"{head}_prob_a"].values) - roc_auc_score(y, m[f"{head}_prob_b"].values)
 
 
 def _sens_spec(df, head):
@@ -82,21 +91,25 @@ def main():
     L = ["# Table 2 — augmentation vs Starved on the comorbid stratum (Section 4, D7)", "",
          "Frozen real test set, both-separable (comorbid) stratum. Probabilities ensembled "
          "across seeds. ΔAUC = arm − Starved, film-level bootstrap 95% CI.", "",
-         "| arm | seeds | head | AUC | sens | spec | ΔAUC vs Starved | 95% CI | helps? |",
-         "|---|---|---|---|---|---|---|---|---|"]
+         "Δ(overall) = general improvement across all strata; Δ(comorbid) = the claim. "
+         "A positive Δ(overall) with a flat/negative Δ(comorbid) is still a NULL for our "
+         "claim (supervisor point 2 — comorbidity-specific, not general, is the criterion).", "",
+         "| arm | seeds | head | comorbid AUC | sens | spec | Δ(overall) | **Δ(comorbid)** | 95% CI | helps comorbid? |",
+         "|---|---|---|---|---|---|---|---|---|---|"]
     verdict_lines = []
     for k, df in have.items():
         for h in HEADS:
             auc = _auc(df, h); sens, spec = _sens_spec(df, h)
             if k == "starved50":
-                L.append(f"| {ARMS[k]} | {df.n_seeds.iloc[0]} | {h} | {auc:.3f} | {sens:.3f} | {spec:.3f} | — | — | (baseline) |")
+                L.append(f"| {ARMS[k]} | {df.n_seeds.iloc[0]} | {h} | {auc:.3f} | {sens:.3f} | {spec:.3f} | — | — | — | (baseline) |")
             else:
                 d, (lo, hi) = _boot_delta(df, base, h)
+                d_all = _delta_overall(df, base, h)
                 helps = "YES" if (d >= 0.05 and lo > 0) else ("~" if d > 0 else "no")
                 L.append(f"| {ARMS[k]} | {df.n_seeds.iloc[0]} | {h} | {auc:.3f} | {sens:.3f} | {spec:.3f} | "
-                         f"{d:+.3f} | [{lo:+.3f},{hi:+.3f}] | {helps} |")
+                         f"{d_all:+.3f} | **{d:+.3f}** | [{lo:+.3f},{hi:+.3f}] | {helps} |")
                 if h == "cardio":
-                    verdict_lines.append(f"{ARMS[k]} cardio ΔAUC={d:+.3f} [{lo:+.3f},{hi:+.3f}] → {helps}")
+                    verdict_lines.append(f"{ARMS[k]} cardio: Δ(overall)={d_all:+.3f}, Δ(comorbid)={d:+.3f} [{lo:+.3f},{hi:+.3f}] → {helps}")
     L += ["", "## Verdict", ""]
     L += [f"- {v}" for v in verdict_lines] or ["- (augmentation arms not yet trained)"]
     L += ["", "_Interpretation: a positive ΔAUC with a CI clear of 0 means the synthetic "
