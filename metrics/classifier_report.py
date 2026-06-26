@@ -63,11 +63,36 @@ def _metrics(df, probs, head, thr):
             "acc": float(acc), "percat_pos_rate": percat}
 
 
-def _load_real() -> pd.DataFrame:
-    df = pd.read_csv(MANIFEST)
-    df = df.assign(category=df["stratum"].map(STRATUM2CAT),
-                   abspath=df["path"].map(lambda p: str(ROOT / p)))
-    return df[["abspath", "cardio", "effusion", "category"]].rename(columns={"abspath": "path"})
+def _load_real(cap: int = 300) -> pd.DataFrame:
+    """LEAKAGE-CLEAN real eval set (the frozen classifier must never have trained on it):
+      cardio / effusion = the classifier's HELD-OUT val split (seed 42, val_frac 0.2);
+      comorbid          = the both-disease test (both-disease held out of classifier training);
+      normal            = fresh No-Finding PA sample, reserved-patient-free (best-effort —
+                          the classifier's original images_normal/ dir is gone on this clone).
+    The old version drew single-disease films from the Exp-6 manifest, which overlapped the
+    classifier's TRAINING set (effusion 403/403, cardio 91/127) — inflating those columns.
+    """
+    import random as _r
+    from metrics.presence_classifier import _val_split_paths
+    rows = []
+    for grp, c, e, cat in [("images_cardio_only", 1, 0, "cardio"),
+                           ("images_effusion_only", 0, 1, "effusion")]:
+        for p in _val_split_paths(ROOT / "data/nih" / grp, val_frac=0.2, seed=42, n=cap):
+            rows.append({"path": str(p), "cardio": c, "effusion": e, "category": cat})
+    mb = pd.read_csv(MANIFEST)
+    mb = mb[mb["stratum"] == "both_separable"]
+    for _, r in mb.iterrows():
+        rows.append({"path": str(ROOT / r["path"]), "cardio": int(r["cardio"]),
+                     "effusion": int(r["effusion"]), "category": "comorbid"})
+    reserved = {int(x) for x in (ROOT / "data/splits/test_patient_ids.txt").read_text().split()}
+    entry = pd.read_csv(ROOT / "data/nih/Data_Entry_2017.csv")
+    nf = entry[(entry["Finding Labels"] == "No Finding") & (entry["View Position"] == "PA")]
+    nf = nf[~nf["Patient ID"].isin(reserved)]
+    names = sorted(nf["Image Index"]); _r.Random(7).shuffle(names)
+    for n in names[:cap]:
+        rows.append({"path": str(ROOT / "data/nih/images" / n), "cardio": 0, "effusion": 0,
+                     "category": "normal"})
+    return pd.DataFrame(rows)
 
 
 def _load_synth(tag: str) -> pd.DataFrame:
@@ -115,6 +140,9 @@ def main():
          f"Frozen DenseNet judge, Youden thresholds cardio>{thr_c:.3f} effusion>{thr_e:.3f}. "
          "Both-disease held out of training (struggles on comorbidity by design). "
          "95% bootstrap CIs.", "",
+         "**Leakage-clean (D9):** real single-disease = the classifier's held-out val split "
+         "(never trained on); comorbid = held-out both-disease test; synth = generated. No real "
+         "eval film was in the classifier's training set.", "",
          "## Per-head sens / spec / acc", "",
          "| source | n | head | sensitivity | specificity | accuracy |",
          "|---|---|---|---|---|---|"]
