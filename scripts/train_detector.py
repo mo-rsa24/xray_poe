@@ -88,14 +88,34 @@ class ManifestDataset(Dataset):
 
 # ── data assembly ──────────────────────────────────────────────────────────────
 
-def build_train_df(both_n: str, seed: int) -> pd.DataFrame:
+SYNTH_LABELS = {"cardio": (1, 0), "effusion": (0, 1), "comorbid": (1, 1)}
+
+
+def _synth_rows(conditions: list[str], tag: str) -> pd.DataFrame:
+    """Synthetic augmentation images → training rows (patient_id=-1, never a real patient)."""
+    rows = []
+    for cond in conditions:
+        c, e = SYNTH_LABELS[cond]
+        for p in sorted((ROOT / "results/synth_sets" / tag / cond).glob("*.png")):
+            rows.append({"path": f"results/synth_sets/{tag}/{cond}/{p.name}",
+                         "Image Index": p.name, "patient_id": -1,
+                         "cardio": c, "effusion": e, "stratum": f"synth_{cond}"})
+    return pd.DataFrame(rows)
+
+
+def build_train_df(both_n: str, seed: int, augment: str = "none", augment_tag: str = "after") -> pd.DataFrame:
     base = pd.read_csv(MANIFESTS / "train_base.csv")
     pool = pd.read_csv(MANIFESTS / "both_pool.csv")
     if both_n != "all":
         k = min(int(both_n), len(pool))
         pool = pool.sample(n=k, random_state=seed).reset_index(drop=True)
-    df = pd.concat([base, pool], ignore_index=True)
-    # fail-fast leakage re-assertion
+    parts = [base, pool]
+    if augment and augment != "none":
+        syn = _synth_rows([c.strip() for c in augment.split(",")], augment_tag)
+        print(f"  augment: +{len(syn)} synth images ({augment}, tag={augment_tag})")
+        parts.append(syn)
+    df = pd.concat(parts, ignore_index=True)
+    # fail-fast leakage re-assertion (synth rows are patient_id=-1, can't be reserved)
     reserved = {int(x) for x in RESERVED.read_text().split()}
     assert not (set(df["patient_id"]) & reserved), "TRAIN POOL LEAKED A RESERVED TEST PATIENT"
     return df
@@ -144,7 +164,7 @@ def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}  arm-both-n={args.both_n}  seed={args.seed}")
 
-    train_df = build_train_df(args.both_n, args.seed)
+    train_df = build_train_df(args.both_n, args.seed, args.augment, args.augment_tag)
     test_df = pd.read_csv(MANIFESTS / "test.csv")
     print(f"train: {len(train_df)} films "
           f"(both={int((train_df['stratum']=='both').sum())})  test: {len(test_df)}")
@@ -211,14 +231,14 @@ def train(args):
     print(f"\nbest mean-AUC={best_mean_auc:.4f} -> {args.out}")
 
     # dump best-epoch per-film predictions for film-level bootstrap CIs in the verdict
-    arm = "oracle" if args.both_n == "all" else f"starved{args.both_n}"
-    preds_dir = ROOT / "results/exp06_oracle/preds"; preds_dir.mkdir(parents=True, exist_ok=True)
+    arm = args.arm_name or ("oracle" if args.both_n == "all" else f"starved{args.both_n}")
+    preds_dir = ROOT / args.preds_dir; preds_dir.mkdir(parents=True, exist_ok=True)
     best_td[["Image Index", "patient_id", "stratum", "cardio", "effusion",
              "cardio_prob", "effusion_prob"]].to_csv(
         preds_dir / f"{arm}_s{args.seed}.csv", index=False)
 
     # append the per-seed AUC-by-stratum row
-    row = {"arm": "oracle" if args.both_n == "all" else f"starved{args.both_n}",
+    row = {"arm": arm,
            "both_n": args.both_n, "seed": args.seed, "ckpt": str(args.out), **best_res}
     ap = Path(args.auc_csv); ap.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame([row]).to_csv(ap, mode="a", header=not ap.exists(), index=False)
@@ -230,6 +250,10 @@ def train(args):
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--both-n", default="all", help="'all' (Oracle) or an int like 50 (Starved)")
+    p.add_argument("--augment", default="none", help="synth conditions to add: cardio,effusion | comorbid | none")
+    p.add_argument("--augment-tag", default="after", help="synth_sets tag to draw augmentation from")
+    p.add_argument("--arm-name", default=None, help="override arm label (e.g. aug_indiv, aug_poe)")
+    p.add_argument("--preds-dir", default="results/exp06_oracle/preds", help="where to dump per-film preds")
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--out", required=True)
     p.add_argument("--auc-csv", required=True)
