@@ -70,11 +70,14 @@ def main():
     ap.add_argument("--device", default=None)
     ap.add_argument("--out-dir", default="figures")
     ap.add_argument("--scan", type=int, default=40, help="images to scan per cell for correct/incorrect")
+    ap.add_argument("--ckpt", default="ckpts/presence_classifier_finetuned.pt",
+                    help="classifier to GradCAM (Fig 3: an augmented arm, e.g. ckpts/aug_poe_s01.pt)")
+    ap.add_argument("--label", default="", help="suffix for output filenames (e.g. _aug_poe → fig1_gradcam_<src>_aug_poe.png)")
     args = ap.parse_args()
     import torch
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
-    model, ci, ei = load_model("ckpts/presence_classifier_finetuned.pt", device)
-    ck = torch.load("ckpts/presence_classifier_finetuned.pt", map_location="cpu")
+    model, ci, ei = load_model(args.ckpt, device)
+    ck = torch.load(args.ckpt, map_location="cpu")
     thr = {0: ck["youden_threshold_cardio"], 1: ck["youden_threshold_effusion"]}
     cam_engine = GradCAM(model, device)
 
@@ -110,7 +113,7 @@ def main():
                      f"(cols: Normal/Effusion/Cardio/Comorbid; rows: 2 correct + 2 incorrect)",
                      fontsize=11)
         fig.tight_layout()
-        out = Path(ROOT / args.out_dir) / f"fig1_gradcam_{source}.png"
+        out = Path(ROOT / args.out_dir) / f"fig1_gradcam_{source}{args.label}.png"
         out.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out, dpi=130); plt.close(fig)
         print(f"-> {out.relative_to(ROOT)}")
