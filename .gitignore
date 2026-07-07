@@ -3,10 +3,11 @@
 data.zip
 *.zip
 ckpts/
+ckpts_*/
 logs/
 figures/
 runs/
-plans/
+/plans/
 plans_v1_archive/
 briefs/
 paper/
@@ -17,10 +18,9 @@ __pycache__/
 .eggs/
 dist/
 build/
-# illuminate-output/
-# outputs/
+illuminate-output/
+outputs/
 # todoist/
-# plans/
 *.so
 
 # Jupyter
@@ -34,6 +34,7 @@ wandb/
 
 # local tool state
 .claude/todoist-sync.json
+.claude/hooks/.timeline_watermark
 
 # OS
 .DS_Store

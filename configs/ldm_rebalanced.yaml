@@ -14,8 +14,9 @@
 
 lr: 1.0e-4
 lr_warmup_steps: 500
-batch_size: 8
-grad_accum: 2
+batch_size: 16               # 16×1 = SAME effective batch as the old 8×2 → identical dynamics, fewer GPU passes
+grad_accum: 1                # drop accum to 1 so effective batch stays 16 (the overfit-protective size)
+num_workers: 8               # feed the GPU (modest help here — workload is small, not dataloader-bound)
 model_channels: 128          # UNCHANGED — capacity is not the bottleneck
 num_train_timesteps: 1000
 cfg_dropout_p: 0.15          # keep — regularises against cardio overfit (see note)

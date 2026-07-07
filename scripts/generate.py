@@ -81,8 +81,11 @@ def _load_vae(vae_ckpt: Path, device: torch.device):
     return model
 
 
-def _decode_latents(z0: torch.Tensor, vae, scale_factor: float) -> list[Image.Image]:
-    z0_scaled = z0 / scale_factor
+def _decode_latents(z0: torch.Tensor, vae, scale_factor) -> list[Image.Image]:
+    # scale_factor is a scalar OR a per-channel (4,1,1) tensor; move to z0's device so
+    # both the global and per-channel-whitening cases broadcast correctly.
+    _sf = scale_factor.to(z0.device) if torch.is_tensor(scale_factor) else scale_factor
+    z0_scaled = z0 / _sf
     with torch.no_grad():
         decoded = vae.decode(z0_scaled)
     if hasattr(decoded, "sample"):
@@ -236,8 +239,9 @@ def main() -> None:
 
     scale_factor_path = Path(args.scale_factor)
     if scale_factor_path.exists():
-        scale_factor = torch.load(scale_factor_path, map_location="cpu").item()
-        _console.log(f"[dim]Scale factor:[/dim] {scale_factor:.4f}")
+        scale_factor = torch.load(scale_factor_path, map_location="cpu", weights_only=False).float()
+        _console.log(f"[dim]Scale factor:[/dim] {[round(float(v),3) for v in scale_factor.flatten()]} "
+                     f"(shape {tuple(scale_factor.shape)})")
     else:
         scale_factor = 1.0
         _console.log(f"[yellow]scale_factor.pt not found at {scale_factor_path}; using 1.0[/yellow]")

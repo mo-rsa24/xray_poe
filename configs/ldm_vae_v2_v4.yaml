@@ -1,0 +1,57 @@
+# LDM VAE-v2 μ-latent retrain — v4: PER-CHANNEL WHITENING (fixes washed-out generations).
+#
+# ROOT CAUSE fixed here (diagnosed across arm1→v3): VAE-v2 posterior collapse made the μ
+# latents ANISOTROPIC — per-channel std ~[0.05,0.36,0.09,0.12] (7.6x). A single global
+# scale_factor left the channels at [0.25,1.84,0.45,0.60], so the DDPM unit-variance noise
+# schedule DROWNED the 3 low-variance channels → the LDM generated under-dispersed z0
+# (std 0.39 vs trained 1.0) → washed-out mush for ALL classes (no_finding included).
+# v3 (yrcj8qgl) and 6wj35ips had IDENTICAL z0 std 0.389 with/without min-SNR → the codec,
+# not min-SNR, is the cause. arm1/gtr6kqpk looks best because V1 latents are isotropic [1,1,1,1].
+#
+# FIX: per-channel scale_factor (4,1,1) = 1/std_c → every channel unit-variance = ISOTROPIC,
+# matching the diffusion N(0,1) prior (SD3/EDM2 standard). Verified: post-norm per-ch std [1,1,1,1].
+# Latents unchanged (same joint μ cache); only the normalization changes. Decode divides by the
+# same (4,1,1) sf (un-normalize), so recon fidelity (LPIPS 0.022) is preserved.
+#
+# BUNDLED with the other diagnosed fixes:
+#   - decode ÷scale_factor bug ......... already fixed in scripts/train_ldm.py (now tensor-safe)
+#   - EMA + decay-warmup ............... on (consistency; warmup so panels read early)
+#   - min-SNR .......................... OFF (ruled out as helpful; removed as a confound)
+#   - max_steps 60k .................... early-stop the cardio-overfit decay (cardio peaked ~40k;
+#                                        running to 100k actively regressed it — analyst finding)
+
+latent_cache: data/latents_v2/joint_perch/   # per-channel-normalized (scale_factor.pt is (4,1,1))
+
+lr: 1.0e-4
+lr_warmup_steps: 500
+batch_size: 16
+grad_accum: 1
+num_workers: 8
+model_channels: 128
+num_train_timesteps: 1000
+cfg_dropout_p: 0.15
+bf16: true
+max_steps: 60000             # early-stop: cardio overfits few uniques past ~40-50k
+ckpt_every: 10000
+grid_every: 5000
+compose_every: 15000
+
+ckpt_dir: ckpts/vae_v2_ldm_v4
+
+seed: 42
+
+balance_classes: true
+class_mult:
+  0: 0.20      # no_finding
+  1: 0.40      # cardiomegaly
+  2: 0.40      # effusion
+effusion_weight: 1.0
+
+use_ema: true
+ema_decay: 0.9999
+
+use_min_snr: false           # ruled out (identical z0 std with/without); off = one fewer confound
+
+wandb:
+  project: paper3-ldm
+  run_name_template: "exp_vae_v2_ldm_mu_v4"

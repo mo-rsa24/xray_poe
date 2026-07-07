@@ -193,7 +193,8 @@ def main():
     print(f"        classifier thresholds: cardio>{thr_c:.3f}  effusion>{thr_e:.3f}")
     unet = _load_unet(Path(args.ldm), device)
     vae = _load_vae(Path(args.vae_ckpt), device)
-    sf = torch.load(args.scale_factor, map_location="cpu").item() if Path(args.scale_factor).exists() else 1.0
+    sf = (torch.load(args.scale_factor, map_location="cpu", weights_only=False).float()
+          if Path(args.scale_factor).exists() else 1.0)  # scalar or per-channel (4,1,1); _decode_latents moves to device
 
     # --- generate + load reals ---
     print("        generating synth cardio …")

@@ -1,0 +1,64 @@
+# LDM VAE-v2 μ-latent retrain — RECIPE v2 (collapse-prevention + consistency).
+#
+# PROVENANCE: copied from configs/ldm_vae_v2.yaml (the μ-latent run exp_vae_v2_ldm_mu,
+# W&B 6wj35ips). That run VALIDATED the μ-encode fix (cardio CTR 0.445→0.508, structured
+# CXRs) but exposed two problems this config targets:
+#   1. EFFUSION COLLAPSE — presence/effusion 0.378→0.003 by 25k (cardio's 40% class share
+#      starved the effusion conditional; blunting stopped rendering while CTR held).
+#   2. PER-SEED INCONSISTENCY — presence/cardio swinging 0.00–0.54; some seeds render clean
+#      cardio, others anatomically distorted.
+#
+# THREE LEVERS (see plan; memory ldm-cardio-undertrained-rebalance-lever improvement ladder):
+#   A. class_mult rebalance   0.25/0.40/0.35 → 0.28/0.34/0.38  (un-starve effusion)
+#   B. Weight-EMA (decay 0.9999) — smooth deployment weights → per-seed consistency.
+#      EMA weights saved as ckpts/.../model_ema_step*.safetensors and used for all eval
+#      panels; raw weights keep training + drive resume.
+#   C. min-SNR-γ (γ=5) loss weighting — down-weights high-SNR (low-noise) steps that let
+#      one feature (cardio) dominate the gradient while another (effusion) starves.
+#
+# Latents UNCHANGED: μ (encode_moments) joint cache, scale_factor 5.034. VAE-v2 codec frozen.
+
+latent_cache: data/latents_v2/joint/
+
+lr: 1.0e-4
+lr_warmup_steps: 500
+batch_size: 16
+grad_accum: 1
+num_workers: 8
+model_channels: 128
+num_train_timesteps: 1000
+cfg_dropout_p: 0.15
+bf16: true
+max_steps: 100000            # converges earlier (~30–40k); early-stop fine once effusion holds
+ckpt_every: 10000
+grid_every: 5000
+compose_every: 15000
+
+# ── [CHANGED] new output dir + run name (v3 = protect-cardio rebalance) ───────
+ckpt_dir: ckpts/vae_v2_ldm_v3
+
+seed: 42
+
+# ── [CHANGED v2→v3] class balance — the 0.28/0.34/0.38 mix (run umqnrs0o) fixed
+#     effusion (presence 0.263 @20k raw, no collapse) BUT regressed cardio
+#     (CTR 0.508→0.385, presence 0.263→0.024, 77% cardio→effusion leak) — a see-saw.
+#     Fix: give BOTH diseases capacity by cutting the easy `normal` class; keep cardio
+#     at v1's winning 0.40, lift effusion above its collapsing 0.35.
+balance_classes: true
+class_mult:
+  0: 0.20      # no_finding / normal  (easy class — safe to cut; still ~62k films)
+  1: 0.40      # cardiomegaly         (back to v1's winning share)
+  2: 0.40      # effusion             (above v1's collapsing 0.35, both diseases equal)
+effusion_weight: 1.0         # inert while balance_classes=true
+
+# ── [NEW] Weight-EMA — consistency lever ─────────────────────────────────────
+use_ema: true
+ema_decay: 0.9999
+
+# ── [NEW] min-SNR-γ loss weighting — quality/balance lever ────────────────────
+use_min_snr: true
+min_snr_gamma: 5.0
+
+wandb:
+  project: paper3-ldm
+  run_name_template: "exp_vae_v2_ldm_mu_v3"

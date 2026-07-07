@@ -1,0 +1,63 @@
+# VAE-v2 fine-tune config — NIH+VinDr border-visible perceptual training
+#
+# Fine-tunes vae_step0025000.pt with LPIPS + PatchGAN on the combined border-visible
+# diet to sharpen cardiac-border rendering without regressing |ΔCTR|.
+#
+# All paths are relative to the repo root on hippo (/home/molefe/PhD/Paper3/).
+# Consumed by the training script written in plan 03-vae-retrain.md.
+
+# ── data ────────────────────────────────────────────────────────────────────
+train_manifest: data/vae_v2_diet/train_manifest.csv  # 17,080 rows: nih=10,409 vindr=6,671
+val_fraction: 0.05
+num_workers: 8
+
+# ── augmentation ─────────────────────────────────────────────────────────────
+# hflip is CXR-safe for structural sharpening (VAE is a codec, not an anatomy model;
+# left–right symmetry does not affect cardiac-border sharpness training).
+# random_crop adds ±5% scale variation without geometry distortion;
+# near-square ratio [0.99, 1.01] preserves the CTR-critical aspect ratio.
+augmentation:
+  hflip: true
+  hflip_prob: 0.5
+  random_crop:
+    scale: [0.95, 1.0]
+    ratio: [0.99, 1.01]
+
+# ── architecture ────────────────────────────────────────────────────────────
+res: 512
+grad_checkpoint: true
+
+# ── warm start ──────────────────────────────────────────────────────────────
+# Fine-tune from the existing NIH VAE checkpoint; preserves 25k-step spatial priors.
+warm_start: ckpts/vae/vae_step0025000.pt
+
+# ── perceptual loss ──────────────────────────────────────────────────────────
+# RadImageNet-LPIPS (NOT AlexNet/VGG — out-of-domain for grayscale CXR).
+# Weight ramp: 0.0 → perceptual_weight over perceptual_ramp_steps (avoids KL spike).
+# PatchGAN discriminator introduced at discriminator_start_step.
+perceptual_weight: 0.1
+perceptual_ramp_steps: 1000
+discriminator_weight: 0.5
+discriminator_start_step: 1000
+
+# ── optimisation ────────────────────────────────────────────────────────────
+steps: 50000          # additional steps on top of 25k warm-start (~5-8 hrs on hippo)
+batch: 2              # fp32 ONLY (bf16 GroupNorm collapses VAE decoder → black images);
+                      # LPIPS + PatchGAN add ~6 GB on top of VAE → batch 4 OOM'd at 32 GB;
+                      # batch 2 ≈ 22 GB leaves headroom for LPIPS/disc forward passes
+lr: 5.0e-5            # half of original 1e-4; fine-tune regime
+weight_decay: 1.0e-2
+ema: true
+ema_decay: 0.999
+
+# ── checkpointing ───────────────────────────────────────────────────────────
+ckpt_dir: ckpts/vae_v2
+ckpt_every: 5000
+ckpt: ckpts/vae_v2/vae_v2_final.pt
+
+# ── logging ─────────────────────────────────────────────────────────────────
+log_every: 100
+log_images_every: 500
+manifold_every: 5000
+wandb_project: paper3-vae-v2
+figure: figures/vae_v2_recon.png

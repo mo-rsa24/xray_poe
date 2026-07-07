@@ -1,0 +1,77 @@
+# LDM VAE-v2 training config — joint NIH+VinDr retrain in VAE-v2 latent space.
+#
+# PROVENANCE: copied from configs/ldm_arm1_cleancardio.yaml (the cardio-rescue retrain);
+# changed exactly four keys vs arm1:
+#   1. latent_cache        → data/latents_v2/joint/    (VAE-v2 codec; joint NIH+VinDr)
+#   2. ckpt_dir            → ckpts/vae_v2_ldm          (new output dir)
+#   3. wandb.run_name_template → exp_vae_v2_ldm        (fixed run name)
+#   4. max_steps: 100000   (unchanged from arm1 — confirmed, not a diff line)
+#
+# WHY THIS EXISTS (provenance): the original run hifei736 (configs/ldm_full.yaml)
+# converged at 100k but the CARDIO conditional was starved. Root cause, quantified:
+#   raw counts        cardio 1,713  :  effusion 12,254          (7:1)
+#   legacy sampler    effusion_weight=2.0 on top of that
+#   → effective train mix  cardio ~6%  /  effusion ~81%  /  normal ~13%
+# Result (model_step0100000): gen cardio presence 0.385 alone (real 0.784); CTR 0.395
+# vs real cardio 0.547, below even real normal 0.456 — genuine under-rendering, NOT a
+# metric artifact (xrv ChestX-Det PSPNet validated on real). Sampling-weight reweight
+# at inference is dead (co-presence flat ~4%); capacity & VAE ruled out (effusion
+# over-renders through the same UNet+VAE; rFID 1.81 PASS). The fix is upstream: balance
+# what the model SEES. See memory: ldm-cardio-undertrained-rebalance-lever.
+#
+# VAE-v2 adds: LPIPS+L1 fine-tune from vae_step0025000.pt → vae_v2_step0075000.pt;
+# lower LPIPS (0.022 vs 0.152 baseline), delta_ctr_median 0.003 (GO); eval gate PASSED.
+# Both NIH and VinDr latents share the VAE-v2 codec → no latent-space mismatch.
+# Joint cardio N ≈ 2,774 (NIH ≈1,638 + VinDr 1,136) vs NIH-only 1,638 (+69%).
+# See results/vae_v2/ldm_data_decision.md for full decision record.
+#
+# PREREQUISITE: create data/latents_v2/joint/ symlink union before launching:
+#   see results/vae_v2/ldm_data_decision.md § Config Implication.
+
+# ── [CHANGED KEY 1] latent cache ─────────────────────────────────────────────
+# Joint NIH v2 + VinDr v2, both encoded under vae_v2_step0075000.pt.
+# Run: python scripts/train_ldm.py --config configs/ldm_vae_v2.yaml
+#      --vae-decode-ckpt ckpts/vae_v2/vae_v2_step0075000.pt
+latent_cache: data/latents_v2/joint/
+
+lr: 1.0e-4
+lr_warmup_steps: 500
+batch_size: 16               # 16×1 = SAME effective batch as the old 8×2 → identical dynamics, fewer GPU passes
+grad_accum: 1                # drop accum to 1 so effective batch stays 16 (the overfit-protective size)
+num_workers: 8               # feed the GPU (modest help here — workload is small, not dataloader-bound)
+model_channels: 128          # UNCHANGED — capacity is not the bottleneck
+num_train_timesteps: 1000
+cfg_dropout_p: 0.15          # keep — regularises against cardio overfit (see note)
+bf16: true
+max_steps: 100000            # [KEY 4 — CONFIRMED UNCHANGED from arm1]
+ckpt_every: 10000
+grid_every: 5000             # heavy-eval cadence (recon grid + CFG ablation + CTR/yield dashboard); multiple of 1000. val/loss stays every 1000.
+compose_every: 15000         # compose grid + overlay-panel dashboard (heaviest hook); independent guard, any value.
+
+# ── [CHANGED KEY 2] checkpoint output dir ────────────────────────────────────
+ckpt_dir: ckpts/vae_v2_ldm
+
+seed: 42
+
+# --- Class balance (the change) ---------------------------------------------
+# balance_classes=true switches make_sampler to inverse-frequency weighting, so the
+# SAMPLED proportion of each class equals its class_mult share (normalised), regardless
+# of raw counts. effusion_weight is then IGNORED.
+balance_classes: true
+class_mult:
+  0: 0.25      # no_finding / normal  → 25% of batches
+  1: 0.40      # cardiomegaly         → 40% of batches   ← the rescue
+  2: 0.35      # effusion             → 35% of batches
+# effusion_weight left here only as a dead fallback if balance_classes is set false:
+effusion_weight: 1.0         # neutral (no longer 2.0); inert while balance_classes=true
+
+# ── [CHANGED KEY 3] W&B run name ─────────────────────────────────────────────
+wandb:
+  project: paper3-ldm
+  run_name_template: "exp_vae_v2_ldm"
+
+# --- NOTE: cardio overfit watch --------------------------------------------
+# Only ≈2,774 unique cardio latents now fill 40% of batches (heavy repetition under
+# replacement sampling). Watch train/loss_cls1 (cardio) vs val/loss — if cardio train
+# loss dives while val stalls, drop class_mult[1] toward 0.33 (equal thirds) or shorten
+# max_steps. The per-class loss is already logged every 100 steps.

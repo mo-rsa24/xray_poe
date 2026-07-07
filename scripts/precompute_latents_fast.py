@@ -146,7 +146,15 @@ def encode_split(
         x, labels, outs = batch
         x = x.to(device, non_blocking=True)
         with torch.no_grad():
-            z = vae.encode(x).cpu().float()
+            if getattr(args, "encode_mode", "sample") == "mode":
+                # Deterministic posterior mean μ (the mode). REQUIRED for VAE-v2,
+                # which is posterior-collapsed (σ≈1.0, signal ~3.4%): a sampled z
+                # is ~96% prior noise and decodes to noise, so the LDM trained on
+                # it collapses. μ is the VAE's clean reconstruction (100% signal).
+                z, _ = vae.encode_moments(x)
+                z = z.cpu().float()
+            else:
+                z = vae.encode(x).cpu().float()   # sampled z ~ N(μ,σ)
         for i in range(z.shape[0]):
             pending.append(writer.submit(_save, z[i].clone(), labels[i], outs[i]))
         done += z.shape[0]
@@ -184,6 +192,10 @@ def parse_args() -> argparse.Namespace:
                    help="torch.compile mode: default | reduce-overhead | max-autotune")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--res", type=int, default=512)
+    p.add_argument("--encode-mode", choices=["sample", "mode"], default="sample",
+                   help="'sample' = z~N(μ,σ) (legacy); 'mode' = deterministic μ "
+                        "(REQUIRED for posterior-collapsed VAE-v2). If compile is on, "
+                        "note compile wraps vae.encode; 'mode' uses vae.encode_moments.")
     p.add_argument("--val-fraction", type=float, default=0.05)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--split", choices=["train", "val", "both"], default="both")
@@ -201,7 +213,8 @@ def main() -> None:
 
     vae = VAE(vae_cfg).to(device)
     ckpt = torch.load(args.vae_ckpt, map_location=device, weights_only=False)
-    vae.load_state_dict(ckpt.get("model", ckpt.get("model_state", ckpt)))
+    # "ema" key = vae_v2 EMA weights; "model"/"model_state" = legacy keys
+    vae.load_state_dict(ckpt.get("ema", ckpt.get("model", ckpt.get("model_state", ckpt))))
     vae.eval()
     for p in vae.parameters():
         p.requires_grad_(False)
@@ -215,10 +228,12 @@ def main() -> None:
     # rounding shift is far below the per-image sampling noise already in cache.
     if args.device.startswith("cuda"):
         torch.backends.cudnn.benchmark = True
-    if args.compile:
+    if args.compile and args.encode_mode == "sample":
         vae.encode = torch.compile(vae.encode, mode=args.compile_mode)
         print(f"Compiled VAE encode (mode={args.compile_mode}); "
               f"first batch pays one-off compile cost", flush=True)
+    elif args.encode_mode == "mode":
+        print("encode-mode=mode → using vae.encode_moments (μ), compile skipped", flush=True)
 
     t = time.time()
     train_samples, val_samples = _collect_samples(

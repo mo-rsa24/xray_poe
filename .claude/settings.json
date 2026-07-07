@@ -261,7 +261,42 @@
       "Bash(python -c \"import torch; print\\('torch', torch.__version__, 'cuda', torch.cuda.is_available\\(\\)\\)\")",
       "Bash(break)",
       "Bash(grep -vE \"^\\\\s*$\")",
-      "Bash(~/micromamba/envs/jaxstack/bin/python scripts/comorbidity_panel.py --out figures/comorbidity_panel.png)"
+      "Bash(~/micromamba/envs/jaxstack/bin/python scripts/comorbidity_panel.py --out figures/comorbidity_panel.png)",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('scripts/eval_ckpt_offline.py'\\).read\\(\\)\\); print\\('eval_ckpt_offline.py OK'\\)\")",
+      "Bash(mv 10-figure1-gradcam-panel.md      01-figure1-gradcam-panel.md)",
+      "Bash(mv 11-tables-classifier-report.md   02-tables-classifier-report.md)",
+      "Bash(mv 15-figure-table-paper-ready.md   03-figure-table-paper-ready.md)",
+      "Bash(mv 16-figure-review.md              04-figure-review.md)",
+      "Bash(mv 13-data-cleaning-bias-audit.md   05-data-cleaning-bias-audit.md)",
+      "Bash(sed -i 's/active plan 15\\)/active plan 03\\)/; s/assembly → plan 15\\\\./assembly → plan 03./' complete/INDEX.md)",
+      "Bash(sed -i 's#plans/15-figure-table-paper-ready\\\\.md#plans/03-figure-table-paper-ready.md#g' 01-figure1-gradcam-panel.md 02-tables-classifier-report.md 07-headline-auc.md)",
+      "Bash(sed -i 's#plans 09/11#plans 09/02#g' 01-figure1-gradcam-panel.md)",
+      "Bash(sed -i 's#plans 10/11/12/07#plans 01/02/12/07#g' 03-figure-table-paper-ready.md)",
+      "Bash(sed -i 's#plans 10/11#plans 01/02#g; s/\\(plan 10 \\\\/ D3\\)/\\(plan 01 \\\\/ D3\\)/g; s/\\(plan 11 \\\\/ D4\\)/\\(plan 02 \\\\/ D4\\)/g' 07-headline-auc.md)",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('src/data/latent_dataset.py'\\).read\\(\\)\\); print\\('latent_dataset.py OK'\\)\")",
+      "Bash(grep -nE \"^#{1,3} \" EXPERIMENTS.md)",
+      "Edit(~/.claude/skills/plain-speak/**)",
+      "Bash(PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True timeout 180 micromamba run -n jaxstack python scripts/validate_individual_synthetics.py --ldm ckpts/vae_v2_ldm_v4/model_ema_step0060000.safetensors --tag v4_smoke --vae-ckpt ckpts/vae_v2/vae_v2_step0075000.pt --scale-factor data/latents_v2/joint_perch/scale_factor.pt --classifier ckpts/presence_classifier_finetuned.pt --n 4 --n-real 4 --steps 25)",
+      "Bash(grep -c '▶ `/design-figure`' 03-figure-table-paper-ready.md)",
+      "Bash(grep -c '▶ `/analyze`' 03-figure-table-paper-ready.md)",
+      "Bash(echo \"design-figure prompts: $\\(grep -c '▶ `/design-figure`' 03-figure-table-paper-ready.md\\) | analyze: $\\(grep -c '▶ `/analyze`' 03-figure-table-paper-ready.md\\) | task lines \\(still 12\\): $\\(grep -cE '^\\\\- \\\\[ \\\\] ⚠️' 03-figure-table-paper-ready.md\\)\")",
+      "Bash(grep -c '▶ `/design-figure`' PAPER_ASSEMBLY.md)",
+      "Bash(grep -c '▶ `/analyze`' PAPER_ASSEMBLY.md)",
+      "Bash(PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True micromamba run -n jaxstack python scripts/ctr_vs_detector.py --ckpt ckpts/vae_v2_ldm_v4/model_ema_step0060000.safetensors --vae ckpts/vae_v2/vae_v2_step0075000.pt --scale-factor data/latents_v2/joint_perch/scale_factor.pt --classifier ckpts/presence_classifier_finetuned.pt --real-csv data/splits/cardio_not_effusion.csv --n 200 --w 1.0 --steps 50)",
+      "Bash(sed -n '/## Objectives/,/## Goals/p' additional_plans/vae-v2/MASTER_PLAN.md)",
+      "Bash(sed -n '/## Plans/,$p' additional_plans/vae-v2/MASTER_PLAN.md)",
+      "Bash(mv 08-collapse-prevention.md 09-collapse-prevention.md)",
+      "Bash(mv 07-downstream-eval.md 08-downstream-eval.md)",
+      "Bash(grep -E \"\\\\.\\(py|sh\\)$\")",
+      "Bash(mkdir -p /home/molefe/PhD/Paper3/.claude/hooks /home/molefe/PhD/Paper3/docs/decisions && echo \"dirs ready\")",
+      "Bash(chmod +x .claude/hooks/timeline_stub.sh)",
+      "Bash(touch .claude/hooks/.timeline_watermark)",
+      "Bash(python3 -c \"import json; json.load\\(open\\('.claude/settings.json'\\)\\); print\\('settings.json OK'\\)\")",
+      "Bash(python3 -c \"import json; d=json.load\\(open\\('.claude/settings.json'\\)\\); print\\(json.dumps\\(d['hooks'], indent=2\\)\\)\")",
+      "Bash(cd /home/molefe/PhD/Paper3; touch .claude/hooks/.timeline_watermark; echo \"watermark reset\"; ls -la .claude/hooks/)",
+      "Bash(cd /home/molefe/PhD/Paper3 *)",
+      "Edit(~/.claude/skills/progress-track/**)",
+      "Bash(python3 -c \"import json; d=json.load\\(open\\('.claude/settings.json'\\)\\); print\\('hooks present:', 'hooks' in d\\)\")"
     ],
     "additionalDirectories": [
       "/home/molef/.claude/skills",
@@ -271,7 +306,23 @@
       "/home/molef/PhD/Paper3/paper/wacv-2027",
       "/home/molef/PhD/Paper3/.vscode",
       "/mnt/c/Users/molef/.ssh",
-      "/tmp/claude-1000/-home-molef-PhD-Paper3/a638c484-6d7e-47e1-b8be-cc5ed3443ad5/scratchpad"
+      "/tmp/claude-1000/-home-molef-PhD-Paper3/a638c484-6d7e-47e1-b8be-cc5ed3443ad5/scratchpad",
+      "/home/molefe/.claude/commands",
+      "/home/molefe/PhD/Paper3/.claude",
+      "/home/molefe/PhD/Paper3/.claude/hooks",
+      "/home/molefe/PhD/Paper3/scripts"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/timeline_stub.sh\""
+          }
+        ]
+      }
     ]
   }
 }

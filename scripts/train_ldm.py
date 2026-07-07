@@ -16,10 +16,11 @@ W&B metrics (§4 of plans/single-disease-ldm/EXPERIMENTS.md):
     train/lr                — every step
     train/grad_norm         — every 100 steps
     val/loss                — every 1 000 steps
-    recon/grid              — labeled 4×3 overview every 1 000 steps; Artifact ldm-recon-grid:step{N}
-    recon/{class}           — per-class gallery (4 seeds) every 1 000 steps
-    recon/cfg_ablation      — 3×3 grid (w=0/1/2 × class) every 1 000 steps, 20 DDIM steps
-    compose/null_anchor/w{w}    — wandb.Image every 5 000 steps; 4 panels (anchor×weight), 4 seeds each; Artifact ldm-compose-grid:step{N}
+    recon/grid              — labeled 4×3 overview every grid_every steps (default 5 000); Artifact ldm-recon-grid:step{N}
+    recon/{class}           — per-class gallery (4 seeds) every grid_every steps
+    recon/cfg_ablation      — 3×3 grid (w=0/1/2 × class) every grid_every steps, 20 DDIM steps
+    eval/* (CTR/yield)      — quality dashboard every grid_every steps (32 imgs/finding × 25 DDIM)
+    compose/null_anchor/w{w}    — wandb.Image every compose_every steps (default 15 000); 4 panels (anchor×weight), 4 seeds each; Artifact ldm-compose-grid:step{N}
     compose/healthy_anchor/w{w} —
 
 Checkpoints (every ckpt_every steps):
@@ -31,12 +32,17 @@ Checkpoints (every ckpt_every steps):
     All three files are uploaded together as W&B Artifact ldm-ckpt:step{N}.
 
 Resume behaviour:
-    --resume <wandb-run-id> continues the same W&B run AND loads the latest local
-    checkpoint.  The training loop restarts exactly at the saved step with the
-    optimizer's Adam momentum/variance and cosine LR position intact.
+    --resume <wandb-run-id> loads the latest local checkpoint and restarts the
+    training loop exactly at the saved step with the optimizer's Adam
+    momentum/variance and cosine LR position intact.  By default it starts a
+    FRESH W&B run logging from the checkpoint step (monotonic logging even when
+    the source run was killed past the last checkpoint, with lineage recorded in
+    the run config); pass --wandb-continue to re-enter the same run instead.
 
 Kill criteria:
-    train/loss > 2× loss_at_step_10k → W&B alert + sys.exit(1)
+    EMA(train/loss) > 2× EMA-at-step-10k for _DIVERGENCE_PATIENCE consecutive
+    steps → W&B alert + sys.exit(1).  Smoothed + persistent so ordinary per-step
+    DDPM loss noise cannot trip it (a single noisy spike no longer kills the run).
 """
 
 from __future__ import annotations
@@ -80,6 +86,68 @@ import wandb
 _console = Console(highlight=False)
 
 # ---------------------------------------------------------------------------
+# Recipe: Weight-EMA + min-SNR-γ (collapse-prevention / consistency levers)
+# ---------------------------------------------------------------------------
+
+class _WeightEMA:
+    """Exponential moving average of trainable weights (Karras/EDM-style).
+
+    Maintains a shadow copy updated each optimiser step. ``store_and_copy_to`` /
+    ``restore`` let eval + checkpoint run on the SMOOTH EMA weights and then put the
+    raw training weights back. The EMA weights are what we release for inference
+    (the per-seed consistency win); the raw weights keep training. Keyed by
+    ``model.named_parameters()`` so it spans both unet.* and class_embed.*.
+    """
+
+    def __init__(self, model: torch.nn.Module, decay: float = 0.9999) -> None:
+        self.decay = decay
+        self.shadow = {n: p.detach().clone()
+                       for n, p in model.named_parameters() if p.requires_grad}
+        self._backup: dict = {}
+
+    @torch.no_grad()
+    def update(self, model: torch.nn.Module, step: int | None = None) -> None:
+        # Decay WARMUP: min(decay, (step+1)/(step+10)). Early on the EMA tracks the
+        # raw weights closely (so eval panels are meaningful from step ~1k instead of
+        # being contaminated by the random init until ~40-50k); it ramps to the full
+        # `decay` as training matures. Standard practice (Rombach/SD, EDM).
+        d = self.decay
+        if step is not None:
+            d = min(d, (step + 1) / (step + 10))
+        for n, p in model.named_parameters():
+            if p.requires_grad and n in self.shadow:
+                self.shadow[n].mul_(d).add_(p.detach(), alpha=1.0 - d)
+
+    @torch.no_grad()
+    def store_and_copy_to(self, model: torch.nn.Module) -> None:
+        self._backup = {n: p.detach().clone()
+                        for n, p in model.named_parameters() if p.requires_grad}
+        for n, p in model.named_parameters():
+            if n in self.shadow:
+                p.data.copy_(self.shadow[n])
+
+    @torch.no_grad()
+    def restore(self, model: torch.nn.Module) -> None:
+        for n, p in model.named_parameters():
+            if n in self._backup:
+                p.data.copy_(self._backup[n])
+        self._backup = {}
+
+
+def _min_snr_weight(alphas_cumprod: torch.Tensor, t: torch.Tensor,
+                    gamma: float) -> torch.Tensor:
+    """Per-sample min-SNR-γ loss weight for ε-prediction (Hang et al. 2023).
+
+    SNR(t) = ᾱ_t / (1−ᾱ_t);  weight = min(SNR, γ) / SNR.  Down-weights the very
+    low-noise (high-SNR) steps that otherwise dominate the gradient and let one
+    class/feature (here cardio) sharpen while another (effusion) starves.
+    """
+    abar = alphas_cumprod.to(t.device)[t].clamp(1e-8, 1.0 - 1e-8)
+    snr = abar / (1.0 - abar)
+    return snr.clamp(max=gamma) / snr
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -92,6 +160,640 @@ _ANCHOR_DISPLAY = {
     "null":   "∅-anchor (null token / unconditional)",
     "normal": "healthy-anchor (no-finding class)",
 }
+
+# ── frozen generation-quality eval spec (metrics/eval_checkpoint dashboard) ──────
+# Fixed seeds so the CTR/yield dashboard is comparable step-to-step. 64 each for the
+# scalar metrics; a 12-image (3 findings × 4 seeds) subset for the overlay panels.
+# Reuses _COMPOSE_SEEDS as the panel seeds where sensible.
+_EVAL_N_PER_FINDING = 32         # monitoring CTR/yield mean is stable at 32; halves dashboard cost
+_EVAL_BASE_SEED_NORMAL = 600_000
+_EVAL_BASE_SEED_CARDIO = 700_000
+_EVAL_BASE_SEED_EFFUSION = 800_000
+_EVAL_BASE_SEED_POE = 900_000
+
+# ── trajectory diagnostic probes (compose_every cadence) ─────────────────────
+# Denoising accuracy probe: take a real latent, add noise to t, predict ε, derive
+# ẑ₀, decode, compare vs original.  Localises where in the noise schedule the model
+# struggles (low SSIM at t=200 = fine-detail failure; low SSIM at t=800 = coarse
+# anatomy failure).  PoE composition probe: same but with the composed ε — checks
+# whether cardio signature survives when effusion conditioning is added.
+_PROBE_T_LEVELS = (200, 400, 600, 800)   # noise timesteps to probe
+_PROBE_SEED_BASE = 999_999               # fixed noise seed for reproducibility
+_PROBE_LATENTS: dict = {}                # cls → (1,4,128,128) unscaled CPU tensor (mean of 5)
+_HPROBE_LATENTS: dict = {}               # cls → list[(1,4,128,128)] unscaled CPU tensors (up to 50)
+_EVAL_PANEL_SEEDS = _COMPOSE_SEEDS              # 4 seeds → 4 panels per finding (12 total)
+_EVAL_POE_W_CARDIO = 2.0
+_EVAL_POE_W_EFFUSION = 1.0
+_EVAL_DDIM_STEPS = 25            # monitor-grade sampling; final figures regen at full DDIM
+
+# Lazily-built, CPU-resident instrument handles (PSPNet seg + presence classifier).
+# Loaded once on first eval; moved to GPU only for the brief inference, then back —
+# mirrors the _vae_decode_only CPU-offload pattern.
+_EVAL_SEG = None            # (PSPNet, idx) or "FAILED"
+_EVAL_CLASSIFIER = None     # (model, cardio_idx, effusion_idx, ckpt) or "FAILED"
+
+
+def _eval_load_instruments():
+    """Lazy-load PSPNet (+ presence classifier) once, CPU-resident. Returns
+    (seg, classifier); either may be None if its load failed (eval degrades but
+    never raises)."""
+    global _EVAL_SEG, _EVAL_CLASSIFIER
+    if _EVAL_SEG is None:
+        try:
+            import scripts.ctr_overlay as C
+            _EVAL_SEG = C._load_seg("cpu")            # CPU-resident; .to(device) at eval
+        except Exception as exc:
+            _console.log(f"[yellow]eval: PSPNet load failed ({exc}) — dashboard disabled[/yellow]")
+            _EVAL_SEG = "FAILED"
+    if _EVAL_CLASSIFIER is None:
+        try:
+            from metrics import presence_classifier as P
+            _EVAL_CLASSIFIER = P.load_model("cpu")
+        except Exception as exc:
+            _console.log(f"[dim]eval: presence classifier unavailable ({exc}) — presence/* = nan[/dim]")
+            _EVAL_CLASSIFIER = "FAILED"
+    seg = None if _EVAL_SEG == "FAILED" else _EVAL_SEG
+    clf = None if _EVAL_CLASSIFIER == "FAILED" else _EVAL_CLASSIFIER
+    return seg, clf
+
+
+def _load_probe_latents(val_dir) -> None:
+    """Load probe latents from val split into _PROBE_LATENTS and _HPROBE_LATENTS.
+
+    _PROBE_LATENTS  : mean of up to 5 latents per class → (1,4,128,128) per class.
+                      Used by denoising/PoE single-step probes.
+    _HPROBE_LATENTS : list of up to 50 latents per class → list[(1,4,128,128)].
+                      Used by h-space linear probe and latent arithmetic.
+    """
+    global _PROBE_LATENTS, _HPROBE_LATENTS
+    val_path = Path(val_dir)
+    if not val_path.is_dir():
+        return
+    N_PROBE, N_HPROBE = 5, 50
+    by_class: dict = {0: [], 1: [], 2: []}
+    for f in sorted(val_path.glob("*.pt")):
+        if all(len(v) >= N_HPROBE for v in by_class.values()):
+            break
+        try:
+            d = torch.load(f, map_location="cpu", weights_only=False)
+            l = int(d.get("label", -1))
+            if l in by_class and len(by_class[l]) < N_HPROBE:
+                by_class[l].append(d["z"].float().unsqueeze(0))   # (1,4,128,128)
+        except Exception:
+            continue
+    # _PROBE_LATENTS: mean of up to N_PROBE films per class
+    _PROBE_LATENTS = {}
+    for k, zlist in by_class.items():
+        if zlist:
+            stack = torch.stack([z.squeeze(0) for z in zlist[:N_PROBE]])
+            _PROBE_LATENTS[k] = stack.mean(0).unsqueeze(0)
+    # _HPROBE_LATENTS: full list for h-space probe
+    _HPROBE_LATENTS = {k: v for k, v in by_class.items() if v}
+    _console.log(
+        f"[dim]Probe buffers:[/dim] {len(_PROBE_LATENTS)} probe classes, "
+        f"{sum(len(v) for v in _HPROBE_LATENTS.values())} hprobe latents "
+        f"from {val_path}"
+    )
+
+
+def _decode_latent(vae, z_scaled: torch.Tensor, scale_factor: float) -> "np.ndarray":
+    """Decode a (1,4,128,128) scaled latent → uint8 (512,512) grayscale."""
+    import numpy as np
+    with torch.no_grad():
+        out = vae.decode(z_scaled / scale_factor)
+        if hasattr(out, "sample"):
+            out = out.sample
+    img = out[0, 0].float().clamp(-1, 1).cpu()
+    return ((img + 1) / 2 * 255).numpy().astype(np.uint8)
+
+
+def _side_by_side_overlay(gray_a: "np.ndarray", gray_b: "np.ndarray",
+                           label_a: str, label_b: str,
+                           seg_model, idx, device: "torch.device") -> "np.ndarray":
+    """PSPNet-overlay both images and return a (512,1024,3) side-by-side RGB panel."""
+    import numpy as np
+    import metrics.eval_checkpoint as EC
+
+    def _overlay(g):
+        m = EC.score_decoded_array(seg_model, idx, g, str(device), with_masks=True)
+        masks = m.get("_masks") or {}
+        import scripts.ctr_overlay as C
+        o = EC.OverlayResult(
+            stem=label_a, base=g, ctr=m["ctr"],
+            heart_conf=m.get("heart_conf", 0.0),
+            opacity=m.get("peri_cardiac_opacity", float("nan")),
+            border_visible=bool(m.get("border_visible")),
+            cp_left=m.get("cp_left", {}), cp_right=m.get("cp_right", {}),
+            heart_line=m.get("heart_line"), thorax_line=m.get("thorax_line"),
+            heart_mask=masks.get(C.HEART),
+            llung_mask=masks.get(C.LLUNG),
+            rlung_mask=masks.get(C.RLUNG),
+        )
+        return EC.render_burned(None, o), m["ctr"]
+
+    burned_a, ctr_a = _overlay(gray_a)
+    burned_b, ctr_b = _overlay(gray_b)
+    sep = np.full((512, 4, 3), 80, dtype=np.uint8)   # thin grey separator
+    return np.concatenate([burned_a, sep, burned_b], axis=1), ctr_a, ctr_b
+
+
+def _log_denoise_probe(
+    unet, vae, scheduler, scale_factor: float, device: "torch.device", step: int,
+    seg
+) -> None:
+    """Single-step denoising accuracy probe at t ∈ _PROBE_T_LEVELS.
+
+    For each (t, class) pair with a probe latent:
+      z₀ (real)  →  z_t = add_noise(z₀, ε, t)  →  ε̂ = unet(z_t, t, class)
+      →  ẑ₀ = (z_t − √(1−ᾱ_t) · ε̂) / √(ᾱ_t)  →  decode  →  PSPNet overlay.
+
+    W&B (per t, per class):
+      diag/denoise/ssim_t{T}_cls{C}   — SSIM(real, ẑ₀) in [0,1]
+      diag/denoise/dctr_t{T}_cls{C}   — |CTR_real − CTR_ẑ₀|
+    W&B (per t):
+      diag/denoise/panel_t{T}         — (3 classes × 2) side-by-side PSPNet RGB panel
+    """
+    import numpy as np
+    from skimage.metrics import structural_similarity as ssim_fn
+
+    if not _PROBE_LATENTS:
+        return
+
+    seg_model, seg_idx = seg
+    CLASS_DISPLAY = {0: "normal", 1: "cardio", 2: "effusion"}
+    metrics: dict = {}
+    ssim_cardio_by_t: dict = {}   # returned for SNR-vs-gap plot
+
+    unet.eval()
+    try:
+        for t_val in _PROBE_T_LEVELS:
+            t_tensor = torch.tensor([t_val], device=device, dtype=torch.long)
+            alpha_bar = scheduler.alphas_cumprod.to(device)[t_val]
+            sqrt_alpha = alpha_bar.sqrt()
+            sqrt_one_minus = (1.0 - alpha_bar).sqrt()
+
+            row_imgs = []   # one (512,1028,3) per class for the panel
+            for cls_idx in [0, 1, 2]:
+                if cls_idx not in _PROBE_LATENTS:
+                    row_imgs.append(None)
+                    continue
+                z0_raw = _PROBE_LATENTS[cls_idx].to(device)   # (1,4,128,128) unscaled
+                z0 = z0_raw * scale_factor
+                g = torch.Generator(device=device).manual_seed(
+                    _PROBE_SEED_BASE + cls_idx * 1000 + t_val)
+                noise = torch.randn_like(z0, generator=g)
+                z_t = scheduler.add_noise(z0, noise, t_tensor)
+                label = torch.tensor([cls_idx], device=device, dtype=torch.long)
+                with torch.no_grad():
+                    eps_pred = unet(z_t, t_tensor.expand(1), label)
+                z0_pred = (z_t - sqrt_one_minus * eps_pred) / sqrt_alpha
+
+                gray_real = _decode_latent(vae, z0, scale_factor)
+                gray_pred = _decode_latent(vae, z0_pred, scale_factor)
+
+                ssim_val = ssim_fn(gray_real.astype(np.float32) / 255,
+                                   gray_pred.astype(np.float32) / 255,
+                                   data_range=1.0)
+                metrics[f"diag/denoise/ssim_t{t_val}_cls{cls_idx}"] = float(ssim_val)
+                if cls_idx == 1:
+                    ssim_cardio_by_t[t_val] = float(ssim_val)
+
+                panel_row, ctr_real, ctr_pred = _side_by_side_overlay(
+                    gray_real, gray_pred,
+                    f"real_{CLASS_DISPLAY[cls_idx]}  CTR={ctr_real:.3f}" if False else "real",
+                    f"ẑ₀@t={t_val}",
+                    seg_model, seg_idx, device,
+                )
+                if np.isfinite(ctr_real) and np.isfinite(ctr_pred):
+                    metrics[f"diag/denoise/dctr_t{t_val}_cls{cls_idx}"] = abs(ctr_real - ctr_pred)
+                row_imgs.append(panel_row)
+
+            # Stack valid rows into one panel
+            valid = [r for r in row_imgs if r is not None]
+            if valid:
+                panel = np.concatenate(valid, axis=0)   # (N×512, 1028, 3)
+                wandb.log({f"diag/denoise/panel_t{t_val}": wandb.Image(panel)}, step=step)
+
+        wandb.log(metrics, step=step)
+    finally:
+        unet.train()
+    return ssim_cardio_by_t
+
+
+def _log_poe_compose_probe(
+    unet, vae, scheduler, scale_factor: float, device: "torch.device", step: int,
+    seg, null_token_idx: int
+) -> None:
+    """PoE composition probe: does cardio signature survive PoE denoising at each t?
+
+    Takes the real cardio probe latent, noises to t, then applies one step of:
+      a) cardio-only CFG  → ẑ₀_cardio
+      b) PoE (cardio+effusion) → ẑ₀_poe
+
+    Decodes all three (real, cardio-denoised, PoE-denoised) and logs PSPNet overlays.
+    The key scalar: does CTR in ẑ₀_poe stay close to CTR in ẑ₀_cardio?
+    If CTR collapses in PoE at high t → early trajectory failure (gross anatomy).
+    If CTR collapses only at low t → late trajectory failure (fine rendering).
+
+    W&B (per t):
+      diag/poe_compose/cardio_ctr_t{T}    — CTR of cardio-only ẑ₀
+      diag/poe_compose/poe_cardio_ctr_t{T} — CTR of PoE ẑ₀ (key: does it hold?)
+      diag/poe_compose/panel_t{T}          — 3-panel PSPNet overlay (real|cardio|PoE)
+    """
+    import numpy as np
+
+    if 1 not in _PROBE_LATENTS:
+        return {}   # need real cardio latent
+
+    seg_model, seg_idx = seg
+    w_c, w_e = _EVAL_POE_W_CARDIO, _EVAL_POE_W_EFFUSION
+    metrics: dict = {}
+    ssim_poe_by_t: dict = {}   # returned for SNR-vs-gap plot
+
+    unet.eval()
+    try:
+        z0_raw = _PROBE_LATENTS[1].to(device)   # (1,4,128,128) real cardio, unscaled
+        z0 = z0_raw * scale_factor
+        gray_real = _decode_latent(vae, z0, scale_factor)
+
+        for t_val in _PROBE_T_LEVELS:
+            t_tensor = torch.tensor([t_val], device=device, dtype=torch.long)
+            alpha_bar = scheduler.alphas_cumprod.to(device)[t_val]
+            sqrt_alpha = alpha_bar.sqrt()
+            sqrt_one_minus = (1.0 - alpha_bar).sqrt()
+
+            g = torch.Generator(device=device).manual_seed(_PROBE_SEED_BASE + 10_000 + t_val)
+            noise = torch.randn_like(z0, generator=g)
+            z_t = scheduler.add_noise(z0, noise, t_tensor)
+
+            lbl_null = torch.tensor([null_token_idx], device=device, dtype=torch.long)
+            lbl_c = torch.tensor([1], device=device, dtype=torch.long)
+            lbl_e = torch.tensor([2], device=device, dtype=torch.long)
+            with torch.no_grad():
+                eps_null = unet(z_t, t_tensor, lbl_null)
+                eps_c = unet(z_t, t_tensor, lbl_c)
+                eps_e = unet(z_t, t_tensor, lbl_e)
+
+            eps_cardio_cond = eps_null + 2.0 * (eps_c - eps_null)     # w_c=2.0
+            eps_poe = eps_null + w_c * (eps_c - eps_null) + w_e * (eps_e - eps_null)
+
+            z0_pred_c = (z_t - sqrt_one_minus * eps_cardio_cond) / sqrt_alpha
+            z0_pred_poe = (z_t - sqrt_one_minus * eps_poe) / sqrt_alpha
+
+            gray_c = _decode_latent(vae, z0_pred_c, scale_factor)
+            gray_poe = _decode_latent(vae, z0_pred_poe, scale_factor)
+
+            # PoE SSIM vs real cardio (for SNR-vs-gap plot)
+            from skimage.metrics import structural_similarity as ssim_fn
+            ssim_poe_val = ssim_fn(gray_real.astype(np.float32) / 255,
+                                   gray_poe.astype(np.float32) / 255,
+                                   data_range=1.0)
+            metrics[f"diag/denoise/ssim_t{t_val}_poe"] = float(ssim_poe_val)
+            ssim_poe_by_t[t_val] = float(ssim_poe_val)
+
+            # PSPNet score all three
+            def _score_and_overlay(g, label):
+                import metrics.eval_checkpoint as EC
+                import scripts.ctr_overlay as C
+                m = EC.score_decoded_array(seg_model, seg_idx, g, str(device), with_masks=True)
+                masks = m.get("_masks") or {}
+                o = EC.OverlayResult(
+                    stem=label, base=g, ctr=m["ctr"],
+                    heart_conf=m.get("heart_conf", 0.0),
+                    opacity=m.get("peri_cardiac_opacity", float("nan")),
+                    border_visible=bool(m.get("border_visible")),
+                    cp_left=m.get("cp_left", {}), cp_right=m.get("cp_right", {}),
+                    heart_line=m.get("heart_line"), thorax_line=m.get("thorax_line"),
+                    heart_mask=masks.get(C.HEART),
+                    llung_mask=masks.get(C.LLUNG),
+                    rlung_mask=masks.get(C.RLUNG),
+                )
+                return EC.render_burned(None, o), m["ctr"]
+
+            burned_real, ctr_real = _score_and_overlay(gray_real, "real_cardio")
+            burned_c, ctr_c = _score_and_overlay(gray_c, f"cardio@t={t_val}")
+            burned_poe, ctr_poe = _score_and_overlay(gray_poe, f"PoE@t={t_val}")
+
+            if np.isfinite(ctr_c):
+                metrics[f"diag/poe_compose/cardio_ctr_t{t_val}"] = ctr_c
+            if np.isfinite(ctr_poe):
+                metrics[f"diag/poe_compose/poe_cardio_ctr_t{t_val}"] = ctr_poe
+
+            sep = np.full((512, 4, 3), 80, dtype=np.uint8)
+            panel = np.concatenate([burned_real, sep, burned_c, sep, burned_poe], axis=1)
+            wandb.log({f"diag/poe_compose/panel_t{t_val}": wandb.Image(panel)}, step=step)
+
+        wandb.log(metrics, step=step)
+    finally:
+        unet.train()
+    return ssim_poe_by_t
+
+
+def _log_hspace_probe(
+    unet, scheduler, scale_factor: float, device: "torch.device", step: int
+) -> None:
+    """Linear probe on UNet bottleneck (middle_block) features to track class separation.
+
+    Runs 150 UNet forward passes (50 val latents × 3 classes) at t=500, hooks the
+    middle_block output (B,128,16,16) → 32,768-dim feature per sample, then fits a
+    LogisticRegression to predict class label.
+
+    W&B (every 25 000 steps — expensive; ~150 forward passes):
+      eval/hspace_probe_acc          — 3-class accuracy (normal/cardio/effusion)
+      eval/hspace_probe_acc_cardio   — binary cardio-vs-rest accuracy
+      eval/hspace_probe_acc_effusion — binary effusion-vs-rest accuracy
+
+    Interpretation: if binary cardio accuracy stays low even as CTR improves, the UNet
+    is generating plausible CTR values via a non-class-conditional path — a flag for
+    the disentanglement framing. If high from step 25k onward: UNet has cleanly
+    separated cardio in h-space, and composition failure lives in the guidance math.
+    """
+    if not _HPROBE_LATENTS:
+        return
+
+    T_PROBE = 500
+    t_tensor = torch.tensor([T_PROBE], device=device, dtype=torch.long)
+
+    feats, ys = [], []
+    buf: dict = {}
+    handle = unet.unet.middle_block.register_forward_hook(
+        lambda m, inp, out: buf.__setitem__("h", out.detach().float().cpu())
+    )
+    unet.eval()
+    try:
+        for cls_idx, zlist in _HPROBE_LATENTS.items():
+            for z_raw in zlist:
+                z0 = z_raw.to(device) * scale_factor
+                seed = _PROBE_SEED_BASE + cls_idx * 1000 + len(feats)
+                g = torch.Generator(device=device).manual_seed(seed)
+                noise = torch.randn(1, 4, 128, 128, device=device, generator=g)
+                z_t = scheduler.add_noise(z0, noise, t_tensor)
+                label = torch.tensor([cls_idx], device=device, dtype=torch.long)
+                with torch.no_grad():
+                    unet(z_t, t_tensor, label)
+                if "h" in buf:
+                    feats.append(buf.pop("h").numpy().reshape(-1))
+                    ys.append(cls_idx)
+    finally:
+        handle.remove()
+        unet.train()
+
+    if len(feats) < 10:
+        return
+
+    try:
+        import numpy as np
+        from sklearn.linear_model import LogisticRegression
+        X, y = np.array(feats), np.array(ys)
+        clf = LogisticRegression(C=0.1, max_iter=200, random_state=42)
+        clf.fit(X, y)
+        metrics: dict = {"eval/hspace_probe_acc": float(clf.score(X, y))}
+        for ci, cname in [(1, "cardio"), (2, "effusion")]:
+            yb = (y == ci).astype(int)
+            cb = LogisticRegression(C=0.1, max_iter=200, random_state=42)
+            cb.fit(X, yb)
+            metrics[f"eval/hspace_probe_acc_{cname}"] = float(cb.score(X, yb))
+        wandb.log(metrics, step=step)
+        _console.log(
+            f"[dim]{_now()}[/dim]  step [bold]{step:>6}[/bold]"
+            f"  h-space probe: "
+            f"acc={metrics['eval/hspace_probe_acc']:.3f}  "
+            f"cardio={metrics.get('eval/hspace_probe_acc_cardio', float('nan')):.3f}  "
+            f"effusion={metrics.get('eval/hspace_probe_acc_effusion', float('nan')):.3f}"
+        )
+    except Exception as exc:
+        _console.log(f"[dim]h-space probe fitting failed: {exc}[/dim]")
+
+
+def _log_latent_arith(step: int) -> None:
+    """Latent arithmetic symmetry check (every grid_every steps).
+
+    Tests whether z_c + z_e − z_n is equidistant from the cardio and effusion
+    latent centroids.  Uses frozen VAE val latents so the values are constant
+    during training — the flat line confirms the VAE geometry is stable, and the
+    asymmetry (cos_c vs cos_e) at step 0 tells you which direction PoE's additive
+    assumption is biased.
+
+    W&B:
+      eval/latent_arith_cos_c  — cos(z_c + z_e − z_n,  z_cardio_centroid)
+      eval/latent_arith_cos_e  — cos(z_c + z_e − z_n,  z_effusion_centroid)
+
+    Interpretation: symmetric (cos_c ≈ cos_e) → latent geometry supports PoE.
+    cos_e >> cos_c → arithmetic vector is pulled toward effusion space —
+    cardio is geometrically subordinate and PoE will over-generate effusion.
+    """
+    if not _HPROBE_LATENTS or not all(k in _HPROBE_LATENTS for k in [0, 1, 2]):
+        return
+
+    def _centroid(cls_idx: int) -> "torch.Tensor":
+        zlist = _HPROBE_LATENTS[cls_idx]
+        return torch.stack([z.squeeze(0) for z in zlist]).mean(0).flatten()
+
+    z_n = _centroid(0)
+    z_c = _centroid(1)
+    z_e = _centroid(2)
+    z_arith = z_c + z_e - z_n
+
+    cos_c = float(torch.nn.functional.cosine_similarity(
+        z_arith.unsqueeze(0), z_c.unsqueeze(0)
+    ).item())
+    cos_e = float(torch.nn.functional.cosine_similarity(
+        z_arith.unsqueeze(0), z_e.unsqueeze(0)
+    ).item())
+    wandb.log({"eval/latent_arith_cos_c": cos_c, "eval/latent_arith_cos_e": cos_e},
+              step=step)
+
+
+def _log_snr_gap_plot(
+    ssim_cardio: dict, ssim_poe: dict, scheduler, step: int
+) -> None:
+    """Plot composability gap (SSIM_cardio − SSIM_poe) vs log-SNR(t) at compose_every.
+
+    Both SSIM dicts are keyed by t_val and measure single-step denoising accuracy on
+    the same real cardio probe latent: ssim_cardio uses cardio-only guidance;
+    ssim_poe uses PoE guidance.  The gap = how much effusion conditioning hurts cardio
+    reconstruction, as a function of noise level.
+
+    log-SNR(t) = log(ᾱ_t / (1−ᾱ_t)).  Low SNR (left) = early denoising = global
+    structure.  High SNR (right) = late denoising = fine texture / borders.
+
+    W&B (artifact + scalar per t):
+      diag/snr_gap_plot                   — matplotlib figure
+      diag/snr_gap_t{T}                   — scalar gap at each t (for custom W&B expressions)
+    """
+    import numpy as np
+
+    ts = sorted(t for t in _PROBE_T_LEVELS if t in ssim_cardio and t in ssim_poe)
+    if len(ts) < 2:
+        return
+
+    alphas = scheduler.alphas_cumprod.cpu().float().numpy()
+    log_snrs, gaps = [], []
+    gap_metrics: dict = {}
+    for t in ts:
+        ab = float(np.clip(alphas[t], 1e-6, 1 - 1e-6))
+        log_snrs.append(float(np.log(ab / (1.0 - ab))))
+        gap = float(ssim_cardio[t]) - float(ssim_poe[t])
+        gaps.append(gap)
+        gap_metrics[f"diag/snr_gap_t{t}"] = gap
+    wandb.log(gap_metrics, step=step)
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(5, 3.2))
+        ax.plot(log_snrs, gaps, "o-", color="steelblue", linewidth=2, markersize=6)
+        ax.axhline(0, color="gray", lw=0.8, ls="--")
+        ax.fill_between(log_snrs, gaps, 0,
+                        where=[g > 0 for g in gaps], alpha=0.15, color="steelblue")
+        ax.set_xlabel("log-SNR(t)  [← low SNR / high t = global structure]")
+        ax.set_ylabel("SSIM gap  (cardio-only − PoE)")
+        ax.set_title(f"Composability gap vs noise level   step={step}")
+        for lsnr, gap, t in zip(log_snrs, gaps, ts):
+            ax.annotate(f"t={t}", (lsnr, gap),
+                        textcoords="offset points", xytext=(4, 4), fontsize=8)
+        plt.tight_layout()
+        wandb.log({"diag/snr_gap_plot": wandb.Image(fig)}, step=step)
+        plt.close(fig)
+    except Exception as exc:
+        _console.log(f"[dim]SNR-gap plot failed: {exc}[/dim]")
+
+
+def _eval_gen_decode(unet, vae, ddim_scheduler, null_token_idx, device,
+                     mode: str, n: int, base_seed: int, scale_factor: float = 1.0):
+    """Generate ``n`` latents (single-disease or PoE), decode, and return a list of
+    decoded (512,512) float images in [0,1]. Uses fixed per-image seeds so the
+    dashboard batch is frozen across steps. CUDA only briefly; mirrors the grid hooks.
+
+    z0 is in the SCALED latent space (native × scale_factor); it MUST be divided by
+    scale_factor before decode (matches generate._decode_latents). Omitting this was a
+    bug that was dormant for v1 (sf≈1) but 5× over-scales v2 μ generations (sf≈5.03).
+    """
+    from src.inference.cfg import cfg_single, cfg_compose
+    decoded_imgs: list = []
+    for i in range(n):
+        g = torch.Generator(device=device).manual_seed(base_seed + i)
+        noise = torch.randn(1, 4, 128, 128, generator=g, device=device)
+        with torch.no_grad():
+            if mode == "normal":
+                z0 = cfg_single(unet, noise, 0, 1.0, ddim_scheduler,
+                                steps=_EVAL_DDIM_STEPS, anchor="null",
+                                null_token_idx=null_token_idx)
+            elif mode == "cardio":
+                z0 = cfg_single(unet, noise, 1, 1.0, ddim_scheduler,
+                                steps=_EVAL_DDIM_STEPS, anchor="null",
+                                null_token_idx=null_token_idx)
+            elif mode == "effusion":
+                z0 = cfg_single(unet, noise, 2, 1.0, ddim_scheduler,
+                                steps=_EVAL_DDIM_STEPS, anchor="null",
+                                null_token_idx=null_token_idx)
+            else:  # poe
+                z0 = cfg_compose(unet, noise, _EVAL_POE_W_CARDIO, ddim_scheduler,
+                                 steps=_EVAL_DDIM_STEPS, anchor="null",
+                                 null_token_idx=null_token_idx,
+                                 w_effusion=_EVAL_POE_W_EFFUSION)
+            decoded = vae.decode(z0 / scale_factor)
+            if hasattr(decoded, "sample"):
+                decoded = decoded.sample
+            img = decoded[0, 0].float().clamp(-1, 1).cpu()
+            decoded_imgs.append((img + 1) / 2)            # → [0,1]
+    return decoded_imgs
+
+
+def _run_quality_dashboard(unet, vae, ddim_scheduler, null_token_idx, device, step,
+                           panel: bool, scale_factor: float = 1.0):
+    """Generate the frozen eval batch, score it via metrics.eval_checkpoint, and log
+    namespaced scalars (+ overlay panels when ``panel``). Fully self-contained and
+    GUARDED by its caller; raises into the caller only so the caller can stamp
+    eval/instrument_ok=0.
+    """
+    import metrics.eval_checkpoint as EC
+
+    seg, classifier = _eval_load_instruments()
+    if seg is None:
+        wandb.log({"eval/instrument_ok": 0}, step=step)
+        return
+
+    seg_model, idx = seg
+    seg_model.to(device)
+    if classifier is not None:
+        classifier[0].to(device)
+    try:
+        # 32 / finding for the scalar dashboard (including normal as negative class for AUC)
+        imgs, labels = [], []
+        for mode, lab, base in (
+            ("normal", EC.LABEL_NORMAL, _EVAL_BASE_SEED_NORMAL),
+            ("cardio", EC.LABEL_CARDIO, _EVAL_BASE_SEED_CARDIO),
+            ("effusion", EC.LABEL_EFFUSION, _EVAL_BASE_SEED_EFFUSION),
+            ("poe", EC.LABEL_POE, _EVAL_BASE_SEED_POE),
+        ):
+            batch = _eval_gen_decode(unet, vae, ddim_scheduler, null_token_idx,
+                                     device, mode, _EVAL_N_PER_FINDING, base,
+                                     scale_factor=scale_factor)
+            imgs.extend(batch)
+            labels.extend([lab] * len(batch))
+
+        metrics, overlays = EC.evaluate_checkpoint(imgs, labels, (seg_model, idx),
+                                                   classifier=classifier)
+        metrics["ref/cardio_real"] = EC.CARDIO_REAL_CTR
+        metrics["ref/threshold"] = EC.CTR_THRESHOLD
+        wandb.log(metrics, step=step)
+
+        if panel:
+            _log_quality_panels(EC, unet, vae, ddim_scheduler, null_token_idx,
+                                device, step, (seg_model, idx), classifier,
+                                scale_factor=scale_factor)
+    finally:
+        seg_model.to("cpu")
+        if classifier is not None:
+            classifier[0].to("cpu")
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
+
+def _log_quality_panels(EC, unet, vae, ddim_scheduler, null_token_idx, device, step,
+                        seg, classifier, scale_factor: float = 1.0):
+    """Render burned + layered overlay panels for the fixed 12 (3 findings × 4 seeds)."""
+    seg_model, idx = seg
+    for mode, key in (("normal", "normal"), ("cardio", "cardio"), ("effusion", "effusion"), ("poe", "poe")):
+        # reuse the panel seeds (4 per finding); seeds chosen to overlap _COMPOSE_SEEDS
+        imgs, labels = [], []
+        for s in _EVAL_PANEL_SEEDS:
+            g = torch.Generator(device=device).manual_seed(s)
+            noise = torch.randn(1, 4, 128, 128, generator=g, device=device)
+            from src.inference.cfg import cfg_single, cfg_compose
+            with torch.no_grad():
+                if mode == "cardio":
+                    z0 = cfg_single(unet, noise, 1, 1.0, ddim_scheduler,
+                                    steps=_EVAL_DDIM_STEPS, anchor="null",
+                                    null_token_idx=null_token_idx)
+                elif mode == "effusion":
+                    z0 = cfg_single(unet, noise, 2, 1.0, ddim_scheduler,
+                                    steps=_EVAL_DDIM_STEPS, anchor="null",
+                                    null_token_idx=null_token_idx)
+                else:
+                    z0 = cfg_compose(unet, noise, _EVAL_POE_W_CARDIO, ddim_scheduler,
+                                     steps=_EVAL_DDIM_STEPS, anchor="null",
+                                     null_token_idx=null_token_idx,
+                                     w_effusion=_EVAL_POE_W_EFFUSION)
+                decoded = vae.decode(z0 / scale_factor)
+                if hasattr(decoded, "sample"):
+                    decoded = decoded.sample
+                img = (decoded[0, 0].float().clamp(-1, 1).cpu() + 1) / 2
+            imgs.append(img)
+            labels.append({"normal": EC.LABEL_NORMAL, "cardio": EC.LABEL_CARDIO,
+                           "effusion": EC.LABEL_EFFUSION, "poe": EC.LABEL_POE}[mode])
+        _, overlays = EC.evaluate_checkpoint(imgs, labels, (seg_model, idx),
+                                             classifier=None)
+        burned = [wandb.Image(EC.render_burned(None, o), caption=o.stem) for o in overlays]
+        layered = [EC.render_layered(None, o) for o in overlays]
+        wandb.log({f"panel/{key}_burned": burned,
+                   f"panel/{key}_layered": layered}, step=step)
+        # OPEN GRAFT (deferred): live CTR×CP scatter with shaded Gate-3 pass region.
+        # gate3_yield._scatter already draws exactly this for the offline path; slot a
+        # per-step matplotlib scatter of (ctr, cp_max_angle) for the PoE overlays here
+        # (axvspan CTR>0.5, axhspan CP>80°) and log it as panel/poe_scatter. Not built.
 
 
 def _load_vae_state(vae_model: torch.nn.Module, ckpt_path: str, map_location) -> str:
@@ -187,8 +889,23 @@ def _save_checkpoint(
     lr_scheduler=None,
     loss_at_step_10k: float | None = None,
     is_final: bool = False,
+    ema_suffix: bool = False,
 ) -> None:
     ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+    # ema_suffix: write ONLY the EMA weights file (model_ema_step*.safetensors) —
+    # this is the smooth, inference/deployment checkpoint. The raw-weights call
+    # (ema_suffix=False) writes the config + training_state + W&B artifact needed
+    # for exact resume, so the EMA call skips all of that.
+    if ema_suffix:
+        ema_path = ckpt_dir / f"model_ema_step{step:07d}.safetensors"
+        state = {
+            **unet.state_dict(),
+            **{f"class_embed.{k}": v for k, v in class_embed.state_dict().items()},
+        }
+        save_file(state, ema_path)
+        return
+
     safetensors_path = ckpt_dir / f"model_step{step:07d}.safetensors"
     config_out = ckpt_dir / f"config_step{step:07d}.yaml"
     training_state_path = ckpt_dir / f"training_state_step{step:07d}.pt"
@@ -277,6 +994,7 @@ def _log_cfg_ablation(
     step: int,
     null_token_idx: int,
     device: torch.device,
+    scale_factor: float = 1.0,
 ) -> None:
     """3×3 CFG weight ablation grid logged under 'recon/cfg_ablation'.
 
@@ -311,7 +1029,7 @@ def _log_cfg_ablation(
                     else:
                         eps = eps_cond
                     z = ddim_scheduler.step(eps, t, z).prev_sample
-                decoded = vae.decode(z)
+                decoded = vae.decode(z / scale_factor)
                 if hasattr(decoded, "sample"):
                     decoded = decoded.sample
                 img_np = decoded[0, 0].float().clamp(-1, 1).cpu().numpy()
@@ -367,6 +1085,7 @@ def _log_recon_grid(
     step: int,
     cfg_w: float,
     null_token_idx: int,
+    scale_factor: float = 1.0,
 ) -> None:
     """Decode the 4×3 monitor grid; log labeled overview + per-class panels + Artifact."""
     from PIL import Image as _PILImage
@@ -377,6 +1096,7 @@ def _log_recon_grid(
         vae=vae,
         cfg_weight=cfg_w,
         null_token_idx=null_token_idx,
+        scale_factor=scale_factor,
     )
 
     # Per-class panels: 4 seeds each — supervisor can pin 3 panels side-by-side
@@ -478,6 +1198,7 @@ def _log_compose_grid(
     step: int,
     device: torch.device,
     null_token_idx: int,
+    scale_factor: float = 1.0,
 ) -> None:
     """Run cfg_compose for all anchor × weight combos; log one W&B panel per combo + artifact.
 
@@ -530,7 +1251,7 @@ def _log_compose_grid(
                     _console.log("  [dim]cfg_compose not yet implemented — skipping[/dim]")
                     return
 
-                decoded = vae.decode(z0)
+                decoded = vae.decode(z0 / scale_factor)
                 if hasattr(decoded, "sample"):
                     decoded = decoded.sample
                 img_np = decoded[0, 0].float().clamp(-1, 1).cpu().numpy()
@@ -584,8 +1305,14 @@ def parse_args() -> argparse.Namespace:
                    help="VAE checkpoint for fp32 decode-only at grid steps (latent-cache mode). "
                         "Loaded in fp32 on CPU to avoid bf16 black-pixel artifacts in the decoder.")
     p.add_argument("--resume", default=None,
-                   help="W&B run ID to resume. Continues the same W&B run AND loads the latest "
-                        "local checkpoint from ckpt_dir (model weights + optimizer + LR scheduler).")
+                   help="W&B run ID to resume. Loads the latest local checkpoint from ckpt_dir "
+                        "(model weights + optimizer + LR scheduler) and, by default, starts a "
+                        "FRESH W&B run logging from the checkpoint step (lineage recorded in "
+                        "config) so logging stays monotonic.")
+    p.add_argument("--wandb-continue", action="store_true",
+                   help="With --resume, re-enter the SAME W&B run instead of starting a fresh "
+                        "one. Only safe when the run did not log past the checkpoint step (else "
+                        "W&B drops the re-logged steps as non-monotonic). Default is a fresh run.")
     p.add_argument("--cfg-w", type=float, default=1.0, help="CFG weight for monitor grid")
     p.add_argument("--run-name", "--run_name", default=None, dest="run_name", help="Override W&B run name")
     return p.parse_args()
@@ -601,8 +1328,20 @@ def main() -> None:
 
     torch.manual_seed(cfg.get("seed", 42))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # TF32 — free ~10-20% on matmuls/convs; orthogonal to bf16 autocast, no effect on
+    # training dynamics (the params/grads stay bf16/fp32; this only speeds fp32 matmul paths).
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
     use_bf16 = cfg.get("bf16", False) and device.type == "cuda"
     autocast_dtype = torch.bfloat16 if use_bf16 else torch.float32
+    # Heavy-eval cadence (recon grid + CFG ablation + CTR/yield dashboard). Default 5 000
+    # so the 192-img × DDIM sampling never dominates wall-time. MUST be a multiple of 1 000
+    # (the val-loss cadence it is nested under). val/loss itself stays at every 1 000.
+    grid_every = cfg.get("grid_every", 5000)
+    # Compose grid (both anchors × weights) + overlay-panel dashboard — the heaviest hook.
+    # Independent top-level guard, so any value works; default 15 000 (3× grid_every).
+    compose_every = cfg.get("compose_every", 15000)
 
     run_name = args.run_name or _make_run_name(cfg)
 
@@ -653,7 +1392,11 @@ def main() -> None:
 
     # --- Resume: load checkpoint before touching W&B --------------------------
     step = 0
-    loss_at_step_10k: float | None = None
+    loss_at_step_10k: float | None = None   # reference EMA captured at step 10k (kill guard)
+    loss_ema: float | None = None           # running EMA of train loss (smooths per-step noise)
+    divergence_streak = 0                   # consecutive steps with EMA above 2× reference
+    _LOSS_EMA_BETA = 0.99                   # ~100-step smoothing window
+    _DIVERGENCE_PATIENCE = 200              # sustained breach length before we call it divergence
 
     if args.resume:
         ckpt_path, resume_step = _find_latest_checkpoint(ckpt_dir)
@@ -698,17 +1441,44 @@ def main() -> None:
                 )
             _console.log(f"[dim]Checkpoint: {ckpt_path.name}[/dim]")
 
+    # --- Recipe: Weight-EMA + min-SNR (init AFTER resume so EMA seeds from the
+    #     correct starting weights, fresh or resumed) ----------------------------
+    use_ema = bool(cfg.get("use_ema", False))
+    ema = _WeightEMA(unet, decay=float(cfg.get("ema_decay", 0.9999))) if use_ema else None
+    use_min_snr = bool(cfg.get("use_min_snr", False))
+    min_snr_gamma = float(cfg.get("min_snr_gamma", 5.0))
+    if use_ema or use_min_snr:
+        _console.log(
+            f"[dim]recipe:[/dim] "
+            f"EMA={'decay '+str(cfg.get('ema_decay', 0.9999)) if use_ema else 'off'}  |  "
+            f"min-SNR={'γ='+str(min_snr_gamma) if use_min_snr else 'off'}"
+        )
+
     # --- Banner (after resume detection so step is known) ---------------------
     _print_banner(cfg, run_name, device, max_steps, resume_step=step)
 
     # --- W&B init -------------------------------------------------------------
-    wandb.init(
-        project=cfg["wandb"]["project"],
-        name=run_name,
-        config={k: v for k, v in cfg.items() if k != "wandb"},
-        resume="allow" if args.resume else None,
-        id=args.resume,
-    )
+    # On --resume we load the LOCAL checkpoint (step N) but the source W&B run may
+    # have logged PAST N before dying (e.g. killed at 10 295 with last ckpt at
+    # 10 000). Re-entering that run would re-log 10 001–10 295 and W&B drops them
+    # as non-monotonic. Forking would be ideal but is gated behind a private
+    # preview on this account, so by default we start a FRESH run that logs from
+    # step N onward (monotonic, no drops) and records its lineage in the config.
+    wandb_config = {k: v for k, v in cfg.items() if k != "wandb"}
+    wandb_kwargs: dict = {
+        "project": cfg["wandb"]["project"],
+        "name": run_name,
+        "config": wandb_config,
+    }
+    if args.resume:
+        if args.wandb_continue:
+            wandb_kwargs["resume"] = "allow"
+            wandb_kwargs["id"] = args.resume
+        else:
+            wandb_kwargs["name"] = f"{run_name}_cont{step}"
+            wandb_config["resumed_from_run"] = args.resume
+            wandb_config["resumed_from_step"] = step
+    wandb.init(**wandb_kwargs)
     _console.log(f"[dim]W&B[/dim] run [cyan]{wandb.run.name}[/cyan] → [link={wandb.run.url}]{wandb.run.url}[/link]")
 
     config_artifact = wandb.Artifact("ldm-config", type="config")
@@ -728,6 +1498,8 @@ def main() -> None:
         ).float()
         train_ds = LatentDataset(latent_cache, split="train")
         val_ds = LatentDataset(latent_cache, split="val")
+        # Load probe latents for trajectory diagnostics (silently no-ops if val absent)
+        _load_probe_latents(Path(latent_cache) / "val")
         train_loader = torch.utils.data.DataLoader(
             train_ds,
             batch_size=cfg.get("batch_size", 4),
@@ -736,7 +1508,8 @@ def main() -> None:
                 balance_classes=cfg.get("balance_classes", False),
                 class_mult=cfg.get("class_mult"),
             ),
-            num_workers=4, pin_memory=True, drop_last=True, persistent_workers=True,
+            num_workers=cfg.get("num_workers", 8), pin_memory=True, drop_last=True,
+            persistent_workers=True, prefetch_factor=4,
         )
         val_loader = torch.utils.data.DataLoader(
             val_ds, batch_size=cfg.get("batch_size", 4),
@@ -793,7 +1566,8 @@ def main() -> None:
                 balance_classes=cfg.get("balance_classes", False),
                 class_mult=cfg.get("class_mult"),
             ),
-            num_workers=4, pin_memory=True, drop_last=True, persistent_workers=True,
+            num_workers=cfg.get("num_workers", 8), pin_memory=True, drop_last=True,
+            persistent_workers=True, prefetch_factor=4,
         )
         val_loader = torch.utils.data.DataLoader(
             val_ds, batch_size=cfg.get("batch_size", 4),
@@ -860,7 +1634,15 @@ def main() -> None:
 
                 with torch.autocast(device_type=device.type, dtype=autocast_dtype, enabled=use_bf16):
                     eps_pred = unet(z_noisy, t, labels)
-                    loss = F.mse_loss(eps_pred.float(), noise.float()) / grad_accum
+                    if use_min_snr:
+                        # per-sample MSE × min-SNR-γ weight (Hang et al. 2023)
+                        per_sample = F.mse_loss(
+                            eps_pred.float(), noise.float(), reduction="none"
+                        ).mean(dim=[1, 2, 3])
+                        w = _min_snr_weight(scheduler.alphas_cumprod, t, min_snr_gamma)
+                        loss = (w * per_sample).mean() / grad_accum
+                    else:
+                        loss = F.mse_loss(eps_pred.float(), noise.float()) / grad_accum
 
                 loss.backward()
                 accum_loss += loss.item()
@@ -869,6 +1651,8 @@ def main() -> None:
             optimizer.step()
             lr_scheduler.step()
             optimizer.zero_grad(set_to_none=True)
+            if ema is not None:
+                ema.update(unet, step)
             step += 1
 
             current_lr = optimizer.param_groups[0]["lr"]
@@ -893,7 +1677,7 @@ def main() -> None:
             if step % 100 == 0:
                 per_class = _log_per_class_loss(
                     unet, scheduler, vae_encode_fn,
-                    (x, pre_dropout_labels), scale_factor.item(), device, step,
+                    (x, pre_dropout_labels), scale_factor, device, step,
                 )
                 cls_parts = "  ".join(
                     f"[dim]{CLASS_NAMES[int(k[-1])]}[/dim]=[green]{v:.4f}[/green]"
@@ -927,35 +1711,116 @@ def main() -> None:
                     f"  loss=[bold magenta]{val_loss:.4f}[/bold magenta]"
                 )
 
-                # recon grid + CFG ablation every 1 000 steps
-                if vae_model is not None:
+                # recon grid + CFG ablation + quality dashboard every grid_every steps
+                # (default 5 000; nested under the 1 000-step val guard, so grid_every must
+                # be a multiple of 1 000). The heavy 192-img × DDIM sampling lives here.
+                if vae_model is not None and step % grid_every == 0:
                     _console.log(
                         f"[dim]{_now()}[/dim]  step [bold]{step:>6}[/bold]"
                         f"  [dim]recon grid  4×3 = 12 samples, 50 DDIM steps"
                         f"  +  CFG ablation  3×3, {_CFG_ABLATION_STEPS} steps[/dim]"
                     )
                     t0 = time.perf_counter()
+                    if ema is not None:
+                        ema.store_and_copy_to(unet)   # eval on EMA (deployment) weights
                     if _vae_decode_only:
                         vae_model.to(device)
-                    _log_recon_grid(unet, monitor, ddim_scheduler, vae_model, step, args.cfg_w, null_token_idx)
-                    _log_cfg_ablation(unet, monitor, ddim_scheduler, vae_model, step, null_token_idx, device)
+                    _log_recon_grid(unet, monitor, ddim_scheduler, vae_model, step, args.cfg_w, null_token_idx, scale_factor=scale_factor)
+                    _log_cfg_ablation(unet, monitor, ddim_scheduler, vae_model, step, null_token_idx, device, scale_factor=scale_factor)
+
+                    # generation-quality dashboard (CTR/CP/yield scalars). GUARDED:
+                    # the instrument must NEVER raise into the train loop — on any
+                    # failure stamp eval/instrument_ok=0, warn, and continue.
+                    try:
+                        _run_quality_dashboard(
+                            unet, vae_model, ddim_scheduler, null_token_idx, device,
+                            step, panel=False, scale_factor=scale_factor,
+                        )
+                    except Exception as exc:
+                        wandb.log({"eval/instrument_ok": 0}, step=step)
+                        _console.log(
+                            f"[yellow]{_now()}  step {step}  quality dashboard FAILED "
+                            f"({type(exc).__name__}: {exc}) — eval/instrument_ok=0, continuing[/yellow]"
+                        )
+
+                    # latent arithmetic symmetry — cheap (no model forward passes)
+                    try:
+                        _log_latent_arith(step)
+                    except Exception as exc:
+                        _console.log(f"[dim]latent arith probe failed: {exc}[/dim]")
+
+                    # h-space linear probe — 150 UNet forward passes; every 25k steps only
+                    if step % 25_000 == 0:
+                        try:
+                            _log_hspace_probe(
+                                unet, scheduler, scale_factor, device, step
+                            )
+                        except Exception as exc:
+                            _console.log(f"[dim]h-space probe failed: {exc}[/dim]")
+
                     if _vae_decode_only:
                         vae_model.to("cpu")
                         torch.cuda.empty_cache()
+                    if ema is not None:
+                        ema.restore(unet)             # back to raw training weights
                     _console.log(
                         f"[dim]{_now()}[/dim]  step [bold]{step:>6}[/bold]"
                         f"  [dim]recon → W&B  [{time.perf_counter()-t0:.1f}s][/dim]"
                     )
 
-            # compose grid every 5 000 steps (both anchors, both weights)
-            if step % 5000 == 0 and vae_model is not None:
+            # compose grid + overlay-panel dashboard every compose_every steps (default 15 000)
+            if step % compose_every == 0 and vae_model is not None:
                 t0 = time.perf_counter()
+                if ema is not None:
+                    ema.store_and_copy_to(unet)   # compose/probes on EMA weights
                 if _vae_decode_only:
                     vae_model.to(device)
-                _log_compose_grid(unet, ddim_scheduler, vae_model, step, device, null_token_idx)
+                _log_compose_grid(unet, ddim_scheduler, vae_model, step, device, null_token_idx, scale_factor=scale_factor)
+
+                # burned + layered overlay panels for the fixed 12. GUARDED — same
+                # contract as the scalar dashboard: never raise into the train loop.
+                try:
+                    _run_quality_dashboard(
+                        unet, vae_model, ddim_scheduler, null_token_idx, device,
+                        step, panel=True, scale_factor=scale_factor,
+                    )
+                except Exception as exc:
+                    wandb.log({"eval/instrument_ok": 0}, step=step)
+                    _console.log(
+                        f"[yellow]{_now()}  step {step}  quality panels FAILED "
+                        f"({type(exc).__name__}: {exc}) — eval/instrument_ok=0, continuing[/yellow]"
+                    )
+
+                # trajectory diagnostic probes (denoise accuracy + PoE composition)
+                if _PROBE_LATENTS and vae_model is not None:
+                    seg_for_probe, _ = _eval_load_instruments()
+                    if seg_for_probe is not None:
+                        seg_m, seg_i = seg_for_probe
+                        seg_m.to(device)
+                        try:
+                            ssim_c = _log_denoise_probe(
+                                unet, vae_model, scheduler, scale_factor,
+                                device, step, (seg_m, seg_i),
+                            )
+                            ssim_poe = _log_poe_compose_probe(
+                                unet, vae_model, scheduler, scale_factor,
+                                device, step, (seg_m, seg_i), null_token_idx,
+                            )
+                            if ssim_c and ssim_poe:
+                                _log_snr_gap_plot(ssim_c, ssim_poe, scheduler, step)
+                        except Exception as exc:
+                            _console.log(
+                                f"[yellow]{_now()}  step {step}  trajectory probe FAILED "
+                                f"({type(exc).__name__}: {exc}) — continuing[/yellow]"
+                            )
+                        finally:
+                            seg_m.to("cpu")
+
                 if _vae_decode_only:
                     vae_model.to("cpu")
                     torch.cuda.empty_cache()
+                if ema is not None:
+                    ema.restore(unet)             # back to raw training weights
                 _console.log(
                     f"[dim]{_now()}[/dim]  step [bold]{step:>6}[/bold]"
                     f"  [cyan]PoE compose done[/cyan]  → W&B  [dim][{time.perf_counter()-t0:.1f}s][/dim]"
@@ -969,28 +1834,54 @@ def main() -> None:
                     loss_at_step_10k=loss_at_step_10k,
                     is_final=(step == max_steps),
                 )
+                # EMA weights checkpoint (inference/deployment) — swap in, save, restore
+                if ema is not None:
+                    ema.store_and_copy_to(unet)
+                    try:
+                        _save_checkpoint(
+                            unet.unet, unet.class_embed, cfg, ckpt_dir, step,
+                            config_path, ema_suffix=True,
+                        )
+                    finally:
+                        ema.restore(unet)
                 _console.log(
                     f"[dim]{_now()}[/dim]  step [bold]{step:>6}[/bold]"
                     f"  [bold yellow]CKPT[/bold yellow]"
-                    f"  [dim]→ {ckpt_dir}/model_step{step:07d}.safetensors[/dim]"
+                    f"  [dim]→ {ckpt_dir}/model_step{step:07d}.safetensors"
+                    f"{'  (+ model_ema_step*)' if ema is not None else ''}[/dim]"
                 )
 
-            # kill criteria
-            if step == 10_000:
-                loss_at_step_10k = accum_loss
+            # --- divergence guard (EMA-smoothed + persistent) -----------------
+            # Per-step DDPM loss is intrinsically noisy — each batch denoises a
+            # randomly sampled timestep — so a single-step spike is NOT
+            # divergence. Smooth with an EMA, anchor the reference to the EMA at
+            # step 10k, and only kill when the smoothed loss stays above 2× that
+            # reference for _DIVERGENCE_PATIENCE consecutive steps.
+            loss_ema = (
+                accum_loss if loss_ema is None
+                else _LOSS_EMA_BETA * loss_ema + (1.0 - _LOSS_EMA_BETA) * accum_loss
+            )
+            # Arm at the first warmed step at/after 10k — works for a fresh run
+            # (arms exactly at 10 000) and for a --resume from the 10k checkpoint
+            # (whose state predates reference capture, so it arms just after).
+            if loss_at_step_10k is None and step >= 10_000 and loss_ema is not None:
+                loss_at_step_10k = loss_ema
                 _console.log(
                     f"[dim]{_now()}[/dim]  step [bold]{step:>6}[/bold]"
-                    f"  [dim]kill-criteria reference loss set: {accum_loss:.4f}[/dim]"
+                    f"  [dim]kill-criteria reference EMA set: {loss_ema:.4f}[/dim]"
                 )
-            if loss_at_step_10k is not None and step > 10_000 and accum_loss > 2.0 * loss_at_step_10k:
-                msg = (
-                    f"Loss divergence at step {step}: {accum_loss:.4f} > "
-                    f"2× step-10k value {loss_at_step_10k:.4f}"
-                )
-                wandb.alert(title="LDM training diverged", text=msg, level=wandb.AlertLevel.ERROR)
-                _console.log(f"[bold red]KILL CRITERIA MET:[/bold red] {msg}")
-                wandb.finish(exit_code=1)
-                sys.exit(1)
+            if loss_at_step_10k is not None and step > 10_000:
+                divergence_streak = divergence_streak + 1 if loss_ema > 2.0 * loss_at_step_10k else 0
+                if divergence_streak >= _DIVERGENCE_PATIENCE:
+                    msg = (
+                        f"Loss divergence at step {step}: smoothed loss {loss_ema:.4f} > "
+                        f"2× step-10k EMA {loss_at_step_10k:.4f} for "
+                        f"{_DIVERGENCE_PATIENCE} consecutive steps"
+                    )
+                    wandb.alert(title="LDM training diverged", text=msg, level=wandb.AlertLevel.ERROR)
+                    _console.log(f"[bold red]KILL CRITERIA MET:[/bold red] {msg}")
+                    wandb.finish(exit_code=1)
+                    sys.exit(1)
 
     # --- final checkpoint + finish --------------------------------------------
     _save_checkpoint(
@@ -999,6 +1890,13 @@ def main() -> None:
         loss_at_step_10k=loss_at_step_10k,
         is_final=True,
     )
+    if ema is not None:
+        ema.store_and_copy_to(unet)
+        try:
+            _save_checkpoint(unet.unet, unet.class_embed, cfg, ckpt_dir, step,
+                             config_path, ema_suffix=True)
+        finally:
+            ema.restore(unet)
     wandb.finish()
     _console.print(f"\n[bold green]Training complete[/bold green] — {step:,} steps.")
 

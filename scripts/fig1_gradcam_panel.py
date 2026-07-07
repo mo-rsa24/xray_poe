@@ -176,7 +176,7 @@ def main():
                             Patch(color="#3f6fd6", label="effusion")],
                    loc="lower center", ncol=2, frameon=False, fontsize=10, bbox_to_anchor=(0.5, 0.005))
         name = {"real": "real images", "before": "synthetic · pre-train 40k",
-                "after": "synthetic · rebalanced"}.get(source, source)
+                "after": "synthetic · Arm-1"}.get(source, source)
         fig.suptitle(f"Grad-CAM — {name}", fontsize=14, fontweight="bold", y=0.985)
         fig.tight_layout(rect=[0, 0.03, 1, 0.96])
         out = Path(ROOT / args.out_dir) / f"fig1_gradcam_{source}{args.label}.png"

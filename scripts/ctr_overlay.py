@@ -50,6 +50,16 @@ TAU_HEART_CONF = 0.45     # PSPNet mean heart-mask confidence floor
 CP_BLUNT_DEG = 80.0       # costophrenic wedge angle > this → blunted
 CP_SEV_BINS = (60.0, 90.0, 120.0)   # sharp | mild | moderate | severe
 
+# ── new confound thresholds (provisional) ─────────────────────────────────────
+BASAL_FRAC      = 0.30    # bottom fraction of lung field scored as "basal zone"
+TAU_BASAL_OP    = 0.50    # basal opacity ≥ this → suspicious haziness / effusion base
+TAU_HEMI        = 0.72    # lung-bottom row < 72 % of image height → elevated hemidiaphragm
+TAU_LUNG_COV    = 0.12    # lung-mask coverage < 12 % of image → global whiteout suspected
+
+_BASAL_TINT  = (220, 180, 0)    # amber overlay for basal zone
+_HEMI_NORMAL = (160, 160, 160)  # gray dome line  (normal position)
+_HEMI_HIGH   = (255, 140, 0)    # orange dome line (elevated)
+
 _FONT_CACHE: dict[int, ImageFont.ImageFont] = {}
 
 
@@ -177,6 +187,57 @@ def _peri_cardiac_opacity(gray: np.ndarray, heart: np.ndarray, lungs: np.ndarray
     return float(np.clip((float(band.mean()) - dark) / (bright - dark), 0.0, 1.0))
 
 
+# ── new confound instruments ──────────────────────────────────────────────────
+
+def _basal_opacity(gray: np.ndarray, heart: np.ndarray,
+                   llung: np.ndarray, rlung: np.ndarray) -> float:
+    """Normalized opacity in the bottom BASAL_FRAC of the combined lung field.
+    Uses the same dark/bright reference as peri_cardiac_opacity so the two scores
+    are directly comparable. ~0 = aerated base; ~1 = opacified (effusion/consolidation)."""
+    lungs = llung | rlung
+    rows = np.where(lungs.any(axis=1))[0]
+    if len(rows) < 20:
+        return float("nan")
+    top_row, bot_row = int(rows[0]), int(rows[-1])
+    lung_h = bot_row - top_row
+    if lung_h < 20:
+        return float("nan")
+    basal_start = max(0, bot_row - int(lung_h * BASAL_FRAC))
+    basal_mask = np.zeros_like(lungs)
+    basal_mask[basal_start : bot_row + 1] = lungs[basal_start : bot_row + 1]
+    if basal_mask.sum() < 50:
+        return float("nan")
+    dark   = float(np.percentile(gray[lungs], 20))
+    bright = float(np.median(gray[heart])) if heart.any() else float(np.percentile(gray, 80))
+    if bright - dark < 1:
+        return float("nan")
+    return float(np.clip((gray[basal_mask].mean() - dark) / (bright - dark), 0.0, 1.0))
+
+
+def _hemi_elevation(llung: np.ndarray, rlung: np.ndarray) -> dict:
+    """Detect elevated hemidiaphragm: dome = bottom row of each lung mask.
+    hemi_frac_{L,R}: row / H (0 = top of image, 1 = bottom).
+    Normal dome is at ~0.80–0.85; < TAU_HEMI (0.72) flags as elevated."""
+    H = llung.shape[0]
+    def _dome(mask, side):
+        rows = np.where(mask.any(axis=1))[0]
+        if len(rows) == 0:
+            return {f"hemi_row_{side}": None, f"hemi_frac_{side}": float("nan"),
+                    f"hemi_elevated_{side}": False}
+        row = int(rows[-1])
+        frac = round(row / H, 3)
+        return {f"hemi_row_{side}": row, f"hemi_frac_{side}": frac,
+                f"hemi_elevated_{side}": bool(frac < TAU_HEMI)}
+    return {**_dome(llung, "L"), **_dome(rlung, "R")}
+
+
+def _lung_coverage(llung: np.ndarray, rlung: np.ndarray) -> float:
+    """Fraction of image area covered by lung masks.
+    Very low (< TAU_LUNG_COV) suggests global whiteout — PSPNet can't find lungs."""
+    H, W = llung.shape
+    return float((llung.sum() + rlung.sum()) / (H * W))
+
+
 def _border_visible(opacity: float, heart_conf: float,
                     tau_op: float = TAU_OPACITY, tau_conf: float = TAU_HEART_CONF) -> bool:
     """Gate-0: is the cardiac border traceable (CTR measurable)? True when the
@@ -189,7 +250,7 @@ def _border_visible(opacity: float, heart_conf: float,
 
 # ── CTR per image ────────────────────────────────────────────────────────────────
 
-def ctr_for_image(seg, idx, path: Path, device: str) -> dict:
+def ctr_for_image(seg, idx, path: Path, device: str, with_masks: bool = False) -> dict:
     with torch.no_grad():
         logits = seg(_to_input(path, device))
         probs = torch.sigmoid(logits)[0].cpu().numpy()     # (n_targets, 512, 512)
@@ -197,24 +258,37 @@ def ctr_for_image(seg, idx, path: Path, device: str) -> dict:
     llung, rlung = _mask(probs[idx[LLUNG]]), _mask(probs[idx[RLUNG]])
     lungs = llung | rlung
     gray = np.asarray(Image.open(path).convert("L").resize((512, 512)), dtype=np.float32)
+    # the three segment masks PSPNet found, kept only when we mean to draw them
+    # (numpy arrays — never JSON-serialized; consumed by _overlay's tint pass)
+    masks = {HEART: heart, LLUNG: llung, RLUNG: rlung} if with_masks else None
+    lung_cov = _lung_coverage(llung, rlung)
+    hemi     = _hemi_elevation(llung, rlung)
     if not heart.any() or not lungs.any():
         return {"ctr": float("nan"), "heart_w": 0, "thorax_w": 0, "ok": False,
                 "heart_conf": 0.0, "peri_cardiac_opacity": float("nan"),
-                "border_visible": False,
-                "cp_left": _cp_read(llung), "cp_right": _cp_read(rlung)}
+                "border_visible": False, "_masks": masks,
+                "cp_left": _cp_read(llung), "cp_right": _cp_read(rlung),
+                "basal_opacity": float("nan"), "lung_coverage": round(lung_cov, 3),
+                "global_whiteout": bool(lung_cov < TAU_LUNG_COV), **hemi}
     hw, hy, hx0, hx1 = _max_width(heart)
     tw, ty, tx0, tx1 = _max_width(lungs)
-    heart_conf = float(probs[idx[HEART]][heart].mean())
-    opacity = _peri_cardiac_opacity(gray, heart, lungs)
+    heart_conf  = float(probs[idx[HEART]][heart].mean())
+    opacity     = _peri_cardiac_opacity(gray, heart, lungs)
+    basal_op    = _basal_opacity(gray, heart, llung, rlung)
     return {
         "ctr": float(hw / tw) if tw else float("nan"),
         "heart_w": hw, "thorax_w": tw, "ok": True,
         "heart_conf": round(heart_conf, 3),
         "peri_cardiac_opacity": round(opacity, 3) if np.isfinite(opacity) else float("nan"),
         "border_visible": _border_visible(opacity, heart_conf),
+        "basal_opacity": round(basal_op, 3) if np.isfinite(basal_op) else float("nan"),
+        "lung_coverage": round(lung_cov, 3),
+        "global_whiteout": bool(lung_cov < TAU_LUNG_COV),
+        **hemi,
         "cp_left": _cp_read(llung), "cp_right": _cp_read(rlung),
         "heart_line": [hx0, hy, hx1, hy],
         "thorax_line": [tx0, ty, tx1, ty],
+        "_masks": masks,
     }
 
 
@@ -227,24 +301,122 @@ def _cp_marker(d: ImageDraw.ImageDraw, cp: dict) -> None:
     d.ellipse([x - r, y - r, x + r, y + r], outline=col, width=3)
 
 
-def _overlay(path: Path, m: dict) -> Image.Image:
+# translucent fills for the three segment masks PSPNet returns. Chosen distinct
+# from the CP circles (green/orange) so the tint never reads as a blunting call.
+_SEG_TINT = {
+    HEART: (255, 80, 80),     # heart  → red wash  (matches the red CTR line)
+    LLUNG: (70, 150, 255),    # L lung → blue wash (matches the blue thorax line)
+    RLUNG: (170, 90, 255),    # R lung → violet wash
+}
+
+
+def _draw_confounders(im: Image.Image, m: dict) -> None:
+    """Draw basal-zone amber tint + hemidiaphragm dome lines onto im in place.
+    Called only in tint=True mode after _tint_masks so confound markers sit on top."""
+    masks = m.get("_masks")
+    if not masks:
+        return
+    llung = masks.get(LLUNG); rlung = masks.get(RLUNG)
+    if llung is None or rlung is None:
+        return
+    lungs = llung | rlung
+    rows = np.where(lungs.any(axis=1))[0]
+    if len(rows) < 20:
+        return
+    bot_row  = int(rows[-1])
+    lung_h   = bot_row - int(rows[0])
+
+    # ── amber tint over the basal zone ────────────────────────────────────────
+    if lung_h > 20:
+        basal_start = max(0, bot_row - int(lung_h * BASAL_FRAC))
+        basal_mask  = np.zeros_like(lungs)
+        basal_mask[basal_start : bot_row + 1] = lungs[basal_start : bot_row + 1]
+        if basal_mask.any():
+            arr = np.asarray(im, dtype=np.float32)
+            col = np.array(_BASAL_TINT, dtype=np.float32)
+            arr[basal_mask] = 0.60 * arr[basal_mask] + 0.40 * col
+            im.paste(Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8)))
+
+    # ── hemidiaphragm dome lines ───────────────────────────────────────────────
+    d   = ImageDraw.Draw(im)
+    H, W = llung.shape
+    for lung, side in ((llung, "L"), (rlung, "R")):
+        row = m.get(f"hemi_row_{side}")
+        if row is None:
+            continue
+        frac = row / H
+        col  = _HEMI_HIGH if (frac < TAU_HEMI) else _HEMI_NORMAL
+        safe_row = min(row, H - 1)
+        xs = np.where(lung[safe_row])[0]
+        x0, x1 = (int(xs[0]), int(xs[-1])) if len(xs) > 0 else (0, W)
+        d.line([(x0, row), (x1, row)], fill=col, width=3)
+
+
+def _tint_masks(im: Image.Image, masks: dict | None, alpha: float = 0.32) -> None:
+    """Alpha-blend each segment mask onto the RGB image in place: tinted pixels
+    become (1-a)·original + a·color, so the X-ray stays visible underneath."""
+    if not masks:
+        return
+    arr = np.asarray(im, dtype=np.float32)
+    for tgt, col in _SEG_TINT.items():
+        msk = masks.get(tgt)
+        if msk is None or not msk.any():
+            continue
+        arr[msk] = (1.0 - alpha) * arr[msk] + alpha * np.array(col, dtype=np.float32)
+    im.paste(Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8)))
+
+
+def _overlay(path: Path, m: dict, tint: bool = False) -> Image.Image:
     im = Image.open(path).convert("RGB").resize((512, 512))
+    if tint:
+        _tint_masks(im, m.get("_masks"))      # segment washes first
+        _draw_confounders(im, m)              # basal amber + dome lines on top
     d = ImageDraw.Draw(im)
     if m["ok"]:
         d.line(m["heart_line"], fill=(255, 60, 60), width=4)     # heart width (red)
         d.line(m["thorax_line"], fill=(60, 160, 255), width=4)   # thorax width (blue)
     _cp_marker(d, m.get("cp_left"))                              # CP recesses (green/orange)
     _cp_marker(d, m.get("cp_right"))
-    bv = "Y" if m.get("border_visible") else "N"
+    bv  = "Y" if m.get("border_visible") else "N"
     cl, cr = m.get("cp_left", {}), m.get("cp_right", {})
     _sev = {"sharp": "S", "mild": "M", "moderate": "Mo", "severe": "Sv", "n/a": "-"}
     def _cp(c): return f"{c.get('angle_deg')}({_sev.get(c.get('severity'), '?')})"
     line1 = f"{path.name[:16]}  CTR={m['ctr']:.3f}  border={bv}"
     line2 = f"opac={m.get('peri_cardiac_opacity')}  CP L={_cp(cl)} R={_cp(cr)}"
-    fnt = _font(20)
-    d.rectangle([0, 512 - 62, 512, 512], fill=(0, 0, 0))          # taller label band
-    d.text((6, 512 - 58), line1, fill=(255, 235, 0), font=fnt)
-    d.text((6, 512 - 30), line2, fill=(255, 235, 0), font=fnt)
+    fnt  = _font(20)
+    band = 115 if tint else 62
+    d.rectangle([0, 512 - band, 512, 512], fill=(0, 0, 0))
+    d.text((6, 512 - band + 4),  line1, fill=(255, 235, 0), font=fnt)
+    d.text((6, 512 - band + 28), line2, fill=(255, 235, 0), font=fnt)
+    if tint:
+        # ── line 3: basal / hemidiaphragm / whiteout ──────────────────────
+        ba   = m.get("basal_opacity")
+        ba_s = f"{ba:.2f}" if ba is not None and np.isfinite(float(ba)) else "n/a"
+        hl   = m.get("hemi_frac_L"); hr = m.get("hemi_frac_R")
+        hl_s = f"{hl:.0%}" if hl is not None and np.isfinite(float(hl)) else "??"
+        hr_s = f"{hr:.0%}" if hr is not None and np.isfinite(float(hr)) else "??"
+        flags = []
+        if m.get("global_whiteout"):         flags.append("WHITEOUT")
+        if m.get("hemi_elevated_L"):         flags.append("HEMI-L↑")
+        if m.get("hemi_elevated_R"):         flags.append("HEMI-R↑")
+        if (ba is not None and np.isfinite(float(ba)) and float(ba) >= TAU_BASAL_OP):
+            flags.append("BASAL↑")
+        flag_str = " ".join(flags)
+        line3 = f"basal={ba_s}  dome L={hl_s} R={hr_s}  {flag_str}"
+        flag_col = (255, 100, 100) if flags else (160, 255, 160)
+        d.text((6, 512 - band + 52), line3, fill=flag_col, font=_font(18))
+        # ── color key ─────────────────────────────────────────────────────
+        sfnt = _font(16)
+        d.text((6, 512 - 26), "seg:", fill=(220, 220, 220), font=sfnt)
+        for x, (lab, col) in zip((52, 150, 260),
+                                 (("heart", _SEG_TINT[HEART]), ("Llung", _SEG_TINT[LLUNG]),
+                                  ("Rlung", _SEG_TINT[RLUNG]))):
+            d.text((x, 512 - 26), lab, fill=col, font=sfnt)
+        # amber + dome-line key
+        d.rectangle([360, 512 - 23, 376, 512 - 10], fill=_BASAL_TINT)
+        d.text((380, 512 - 26), "basal", fill=_BASAL_TINT, font=sfnt)
+        d.line([(440, 512 - 18), (460, 512 - 18)], fill=_HEMI_HIGH, width=3)
+        d.text((464, 512 - 26), "dome", fill=_HEMI_HIGH, font=sfnt)
     return im
 
 
@@ -296,6 +468,8 @@ def main() -> None:
     p.add_argument("--fig-n", type=int, default=12, help="example overlays per group in the fig")
     p.add_argument("--film", default=None, help="single-film mode: path to one PA image")
     p.add_argument("--out-overlay", default=None, help="single-film mode: overlay PNG path")
+    p.add_argument("--tint", action="store_true",
+                   help="wash the Heart / Left Lung / Right Lung segment masks in color")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--seed", type=int, default=42)
     args = p.parse_args()
@@ -304,7 +478,7 @@ def main() -> None:
     print(f"PSPNet loaded on {args.device}; heart idx={idx[HEART]}")
 
     if args.film:                                              # single-film sanity mode
-        m = ctr_for_image(seg, idx, Path(args.film), args.device)
+        m = ctr_for_image(seg, idx, Path(args.film), args.device, with_masks=args.tint)
         cl, cr = m.get("cp_left", {}), m.get("cp_right", {})
         print(f"\nfilm = {args.film}")
         print(f"CTR            = {m['ctr']:.3f}" if np.isfinite(m['ctr']) else "CTR            = NaN (seg failed)")
@@ -314,7 +488,7 @@ def main() -> None:
         print(f"CP_blunted_right = {cr.get('blunted')}  (angle={cr.get('angle_deg')}°, {cr.get('severity')})")
         if args.out_overlay:
             Path(args.out_overlay).parent.mkdir(parents=True, exist_ok=True)
-            _overlay(Path(args.film), m).save(args.out_overlay)
+            _overlay(Path(args.film), m, tint=args.tint).save(args.out_overlay)
             print(f"overlay → {args.out_overlay}")
         return
 
@@ -329,7 +503,7 @@ def main() -> None:
     out = {"instrument": "xrv ChestX-Det PSPNet CTR (heart_w / thorax_w)", "groups": {}}
     fig_cells: list[Image.Image] = []
     for label, paths, src in specs:
-        per = [ctr_for_image(seg, idx, pth, args.device) for pth in paths]
+        per = [ctr_for_image(seg, idx, pth, args.device, with_masks=args.tint) for pth in paths]
         ctrs = [m["ctr"] for m in per]
         s = _summary(ctrs)
         out["groups"][label] = {"src": src, **s,
@@ -338,7 +512,7 @@ def main() -> None:
               f"  median={s.get('median',float('nan')):.3f}  frac>0.5={s.get('frac_gt_0.5',float('nan')):.2f}")
         if args.out_fig:
             for pth, m in list(zip(paths, per))[: args.fig_n]:
-                fig_cells.append(_overlay(pth, m))
+                fig_cells.append(_overlay(pth, m, tint=args.tint))
 
     Path(args.out_json).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out_json).write_text(json.dumps(out, indent=2))

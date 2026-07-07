@@ -84,6 +84,7 @@ class MonitorBatch:
         cfg_weight: float = 1.0,
         null_token_idx: int = 3,
         steps: int = 50,
+        scale_factor: float = 1.0,
     ) -> "tuple[PILImage, list]":
         """Run DDIM denoising for all 12 slots; return labeled 4×3 PIL grid and uint8 cells.
 
@@ -120,7 +121,9 @@ class MonitorBatch:
                         eps = eps_cond
                     z = ddim_scheduler.step(eps, t, z).prev_sample
 
-                decoded = vae.decode(z)
+                # z is in the SCALED latent space (native × scale_factor); divide
+                # back to native before decoding (matches generate._decode_latents).
+                decoded = vae.decode(z / scale_factor)
                 if hasattr(decoded, "sample"):
                     decoded = decoded.sample
                 img = decoded[0, 0].float().clamp(-1, 1).cpu().numpy()

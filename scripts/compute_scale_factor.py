@@ -31,6 +31,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out", default="data/latents/scale_factor.pt",
                    help="Output path for the scale_factor tensor")
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--per-channel", action="store_true",
+                   help="Compute a PER-CHANNEL (4,1,1) scale_factor = 1/std_c so every latent "
+                        "channel is normalized to unit variance (isotropic — matches the diffusion "
+                        "N(0,1) prior). REQUIRED for the posterior-collapsed VAE-v2 μ latents, whose "
+                        "per-channel std is ~[0.05,0.36,0.09,0.12] (7.6x anisotropy) — a single global "
+                        "scalar leaves the schedule mismatched per channel and washes out generations.")
     return p.parse_args()
 
 
@@ -64,7 +70,8 @@ def main() -> None:
         # Support both raw tensors and dicts with a 'latent' key
         if isinstance(z, dict):
             z = z.get("latent", z.get("z"))
-        tensors.append(z.float().flatten())
+        # per-channel mode keeps the (C,H,W) shape; global mode flattens
+        tensors.append(z.float() if args.per_channel else z.float().flatten())
 
     if skipped:
         print(f"WARNING: skipped {len(skipped)} unreadable latent file(s):",
@@ -78,21 +85,33 @@ def main() -> None:
         print("ERROR: no readable latents in the sample", file=sys.stderr)
         sys.exit(1)
 
-    all_latents = torch.cat(tensors)
-    std = all_latents.std()
-    scale_factor = torch.tensor(1.0 / std.item())
-
-    print(f"Latent std  : {std.item():.6f}")
-    print(f"scale_factor: {scale_factor.item():.6f}")
-
-    assert 0.5 < scale_factor.item() < 5.0, (
-        f"scale_factor {scale_factor.item():.4f} out of expected range (0.5, 5.0) "
-        "— check that latents are VAE samples, not raw pixel tensors"
-    )
+    if args.per_channel:
+        # Stack (N,C,H,W) → per-channel std over (N,H,W) → (C,1,1) scale = 1/std_c.
+        Z = torch.stack(tensors)                      # (N,4,H,W)
+        std_c = Z.std(dim=(0, 2, 3))                  # (4,)
+        scale_factor = (1.0 / std_c).view(-1, 1, 1)   # (4,1,1) — broadcasts over (B,4,H,W)
+        print(f"per-channel std : {[round(float(v),4) for v in std_c]}")
+        print(f"per-channel sf  : {[round(float(v),3) for v in (1.0/std_c)]}")
+        # sanity: after ×sf each channel is unit variance; global stays ~1
+        chk = (Z * scale_factor).std(dim=(0, 2, 3))
+        print(f"post-norm per-ch std (should be ~1.0): {[round(float(v),3) for v in chk]}")
+        assert bool((std_c > 1e-4).all()), "a channel has ~zero variance — cannot normalize"
+        assert bool((1.0 / std_c < 100).all()), "per-channel sf > 100 — check latents"
+    else:
+        all_latents = torch.cat(tensors)
+        std = all_latents.std()
+        scale_factor = torch.tensor(1.0 / std.item())
+        print(f"Latent std  : {std.item():.6f}")
+        print(f"scale_factor: {scale_factor.item():.6f}")
+        # sampled z~N(μ,σ)→std~1→sf~1; μ (encode_moments) collapsed VAE-v2→std~0.19→sf~5.3.
+        assert 0.5 < scale_factor.item() < 10.0, (
+            f"scale_factor {scale_factor.item():.4f} out of expected range (0.5, 10.0) "
+            "— check that latents are VAE latents (sampled or μ), not raw pixel tensors"
+        )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(scale_factor, out_path)
-    print(f"Saved → {out_path}")
+    print(f"Saved → {out_path}  (shape {tuple(scale_factor.shape)})")
 
 
 if __name__ == "__main__":

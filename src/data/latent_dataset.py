@@ -25,6 +25,9 @@ from torch.utils.data import Dataset, WeightedRandomSampler
 
 
 _LABEL_EFFUSION = 2
+# Sidecar written into each split dir caching per-file labels (excluded from the
+# .pt glob). Makes startup O(1) file reads instead of O(N) after the first run.
+_LABELS_CACHE_NAME = "_labels_cache.pt"
 
 
 class LatentDataset(Dataset):
@@ -42,15 +45,51 @@ class LatentDataset(Dataset):
                 f"Latent cache split directory not found: {split_dir}\n"
                 "Run scripts/precompute_latents.py first."
             )
-        self._files = sorted(split_dir.glob("*.pt"))
+        self._files = sorted(
+            f for f in split_dir.glob("*.pt") if f.name != _LABELS_CACHE_NAME
+        )
         if not self._files:
             raise RuntimeError(f"No .pt files found in {split_dir}")
 
-        # Cache labels in memory so make_sampler doesn't re-load every file.
-        self._labels: list[int] = []
-        for f in self._files:
+        # Labels are needed up-front for make_sampler. Loading every .pt to read one
+        # int is the dominant startup cost (~81k loads for the joint cache → minutes).
+        # Cache them to a sidecar so subsequent launches read one small file instead.
+        self._labels: list[int] = self._load_labels(split_dir)
+
+    def _load_labels(self, split_dir: Path) -> list[int]:
+        """Return per-file labels, using a sidecar cache when valid; else build it
+        (with a progress bar) and write the sidecar for next time."""
+        cache_path = split_dir / _LABELS_CACHE_NAME
+        names = [f.name for f in self._files]
+
+        if cache_path.exists():
+            try:
+                c = torch.load(cache_path, map_location="cpu", weights_only=False)
+                if c.get("names") == names and len(c.get("labels", [])) == len(names):
+                    return [int(x) for x in c["labels"]]
+            except Exception:
+                pass  # corrupt / stale → rebuild below
+
+        # Build with a progress bar (falls back to a one-liner if tqdm is absent).
+        try:
+            from tqdm import tqdm
+            iterator = tqdm(self._files, desc=f"Indexing labels [{split_dir.name}]",
+                            unit="file", dynamic_ncols=True)
+        except Exception:
+            print(f"Indexing labels for {len(self._files)} files in {split_dir} ...",
+                  flush=True)
+            iterator = self._files
+
+        labels: list[int] = []
+        for f in iterator:
             d = torch.load(f, map_location="cpu", weights_only=True)
-            self._labels.append(int(d["label"]))
+            labels.append(int(d["label"]))
+
+        try:
+            torch.save({"names": names, "labels": labels}, cache_path)
+        except Exception as exc:  # read-only fs etc. — non-fatal, just slower next time
+            print(f"(label-cache not written to {cache_path}: {exc})", flush=True)
+        return labels
 
     def __len__(self) -> int:
         return len(self._files)
