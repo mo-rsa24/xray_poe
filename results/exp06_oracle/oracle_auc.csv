@@ -1,4 +1,0 @@
-arm,both_n,seed,ckpt,auc_cardio_overall,auc_effusion_overall,auc_cardio_normal,auc_effusion_normal,auc_cardio_cardio_only,auc_effusion_cardio_only,auc_cardio_effusion_only,auc_effusion_effusion_only,auc_cardio_both_separable,auc_effusion_both_separable
-oracle,all,1,ckpts/oracle_classifier_s01.pt,0.8743777239709443,0.900621349282074,,,,,,,0.7114244451200974,0.7593934911242602
-oracle,all,2,ckpts/oracle_classifier_s02.pt,0.8782251815980628,0.9000581787717298,,,,,,,0.7346837944664032,0.7715236686390533
-oracle,all,3,ckpts/oracle_classifier_s03.pt,0.8746222760290556,0.9005445533033907,,,,,,,0.7148069321982365,0.7552514792899409
