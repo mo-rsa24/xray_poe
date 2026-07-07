@@ -39,4 +39,9 @@ wandb/
 # OS
 .DS_Store
 Thumbs.db
-results/synth_sets/
+
+# heavy outputs — rsync to mscluster separately, not tracked in git
+# (41 small analysis files under results/ were tracked earlier; they stay tracked —
+#  gitignore only stops the ~37k untracked result artifacts from flooding git)
+results/
+learning-captures/
