@@ -32,9 +32,8 @@ outputs/
 kaggle.json
 wandb/
 
-# local tool state
-.claude/todoist-sync.json
-.claude/hooks/.timeline_watermark
+# .claude — rsync to mscluster with the full snapshot, not tracked in git
+.claude/
 
 # OS
 .DS_Store
