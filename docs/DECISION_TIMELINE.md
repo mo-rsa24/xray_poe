@@ -484,6 +484,8 @@ real detector?), and the headline (does the fixed cardio rescue *two-disease* co
   paper's story.
 - **Fired next.** Nothing — recorded and parked. The full 10k best-of-8 pile was **not** built (a
   cleaner pile can't move a flat, reader-limited null); killed to free the GPU for [G9v].
+- **Exhibits.** `results/vae_v2/exhibits/reuse_fig_augment_probe.png` (flat AUC — adding synthetic
+  cardio adds no signal a real detector can use). Rendered in illuminate Act 6.
 
 <!-- evidence: augment-probe-table -->
 **Exhibit — augment-probe (frozen-backbone, 3 sets × 3 seeds × 2 sources)**  ·  tier: quantitative
@@ -542,6 +544,13 @@ Source: `results/section4/augment_probe/verdict.md`, `additional_plans/vae-v2/pl
 - **Fired next.** Filed the verdict (`downstream_eval/verdict.md`) and the pre-registration row
   (`results/tables/table2_augmentation.md`, 2026-07-07). Closes plans 07 + 08. This is the result the
   paper leads with.
+- **Exhibits.** `results/vae_v2/exhibits/`: `overlay_copresence.png` (a big heart CTR 0.83 with a
+  SHARP corner CP 51° — the null made visible), `reuse_guidance_sweep.png` (yield flat as cardio
+  guidance rises), `reuse_ctr_cp_scatter.png` (films cluster one-disease-or-the-other). The cardio
+  inference-fix that this gate tested is exhibited in `chart_detector_bar.png` (best-of-8 0.875 > real
+  0.806) + `overlay_gradcam_cardio.png` (detector heat on the heart, 0.93), and the residual small-heart
+  finding in `chart_ctr_hist.png` + `overlay_cardio_ctr.png` (gen CTR 0.482 vs real 0.536). illuminate
+  Acts 3–5.
 
 <!-- evidence: copresence-verdict -->
 **Exhibit — two-disease composition under the new model**  ·  tier: quantitative
@@ -801,6 +810,9 @@ worry, but the mechanism is subtly different — worth stating precisely.
 - **Fired next.** A diagnostic CFG-weight sweep (w = 1, 2, 4, 7 at n=200; the plan-06 smoke test used
   w=4.0) to separate "weak at low guidance" from "genuine rendering shortfall", and a decision on
   whether the plan-06 pass-mark should be evaluated at w=1.0 at all. No pass claimed until that resolves.
+- **Exhibits.** `results/vae_v2/exhibits/`: `chart_blunt_curve.png` (blunt-rate 32%→66% across w=1→7,
+  never crossing 0.80) + `overlay_effusion_cp.png` (a generated effusion film, both costophrenic corners
+  flagged blunted, CP 150°/109°). illuminate Act 7.
 
 ---
 
