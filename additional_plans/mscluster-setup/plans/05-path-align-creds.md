@@ -28,7 +28,7 @@ The symlinks make those paths resolve to the shared dataset store without touchi
   ln -sfn /datasets/mmolefe/checkpoints/vae_v2 ckpts/vae_v2
   ln -sfn /datasets/mmolefe/checkpoints/vae_v2_ldm_v4 ckpts/vae_v2_ldm_v4
   ```
-- [ ] ⚠️ PARKED (needs you — secret): `WANDB_API_KEY` not set on this node and `wandb` is not logged in. Set it yourself (secret must not be auto-committed). Not required by the smoke test or blunt-check (generate.py does not use W&B). Set `WANDB_API_KEY` and log in (add to `~/.bashrc` for persistence):
+- [x] ✅ Set `WANDB_API_KEY` and log in: ✓ confirmed — key set in environment and `wandb login` accepted (user-verified). Not used by the smoke test or blunt-check, but ready for training/eval runs. Original steps below (add to `~/.bashrc` for persistence):
   ```bash
   export WANDB_API_KEY=<your-key>        # get from wandb.ai/settings
   echo "export WANDB_API_KEY=$WANDB_API_KEY" >> ~/.bashrc

@@ -28,7 +28,7 @@ latents (`latents_v2/joint_perch/` present); VinDr unzipped. Manifest counts mat
   ```
   MODE=push DEST_SSH=mmolefe@mscluster DRY=0 bash scripts/rsync_to_mscluster.sh
   ```
-- [~] ⚠️ Remedy (NIH absent): kaggle CLI works; `download_nih.sh` ran and pulled `data.zip` (24GB) + `Data_Entry_2017.csv` into `/datasets/mmolefe/data/nih`. Image extraction still pending (`nih/images/` empty). NOT required for the smoke/blunt gates. Note: `kaggle whoami` is invalid in kaggle 2.2.3 — use `kaggle config view` instead.
+- [x] ✅ Remedy (NIH absent): DONE — kaggle CLI works; `download_nih.sh` finished: **112,120** images extracted to `/datasets/mmolefe/data/nih/images/` (full ChestX-ray14 set), `Data_Entry_2017.csv` present, `data.zip` auto-removed. Empty `images_00{1..12}` shell dirs remain (harmless; safe to `rmdir`). Note: `kaggle whoami` is invalid in kaggle 2.2.3 — use `kaggle config view` instead.
   ```bash
   pip install kaggle
   mkdir -p ~/.kaggle && chmod 700 ~/.kaggle

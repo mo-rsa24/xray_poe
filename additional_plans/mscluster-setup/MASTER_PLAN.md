@@ -58,14 +58,17 @@ DECISION_TIMELINE.md, and the vae-v2 progress tree up to date. After this scope,
 the Blackwell node can serve as the primary compute for any remaining Paper3 work.
 
 ## Definition of Done
-1. Repo cloned and branch confirmed on mscluster110.
-2. `jaxstack` env active with torch >=2.7 on cu128; capability >=12 asserted.
-3. Data manifest verified (NIH splits + VinDr latents count matches hippo).
-4. VAE-v2 + LDM v4 checkpoint files accessible on mscluster.
-5. All symlinks resolve; WANDB and kaggle creds accepted.
-6. 1-film smoke test produces a valid PNG on the Blackwell GPU.
-7. `effusion_blunt_check.py` blunt-rate >=0.80 recorded AND plan 06 ✅ AND
+1. ✅ Repo cloned and branch confirmed on mscluster110.
+2. ✅ `jaxstack` env active with torch >=2.7 on cu128; capability >=12 asserted.
+   (met via the pytorch container module: torch 2.11.0+cu130, capability (12,0))
+3. ✅ Data manifest verified (NIH splits + VinDr latents count matches hippo).
+   (162,004 latents; NIH 112,120 images + splits; VinDr extracted)
+4. ✅ VAE-v2 + LDM v4 checkpoint files accessible on mscluster.
+5. ✅ All symlinks resolve; WANDB and kaggle creds accepted.
+6. ✅ 1-film smoke test produces a valid PNG on the Blackwell GPU.
+7. ⚠️ `effusion_blunt_check.py` blunt-rate >=0.80 recorded AND plan 06 ✅ AND
    timeline entry appended AND `/progress-track vae-v2` + `/sync-plan-tree` done.
+   (blunt-rate measured 32% < 0.80 → FAIL; diagnosis parked, plan 06 not closed)
 
 ## Sub-Scopes
 (none)
@@ -74,9 +77,9 @@ the Blackwell node can serve as the primary compute for any remaining Paper3 wor
 Dependency order: `01 → 02 → 03 → 04 → 05 → 06 → 07`
 - ✅ 01-cluster-access-git.md — clone repo + checkout branch on mscluster110 (Goal 1)
 - ✅ 02-blackwell-env.md — micromamba `jaxstack` env with torch >=2.7 / cu128; capability >=12 gate (Goal 2)
-- ✅ 03-data.md — verified `/datasets/mmolefe/data` (162k latents, splits, VinDr extracted); NIH zip downloaded, extraction pending (not gate-blocking) (Goal 3)
+- ✅ 03-data.md — verified `/datasets/mmolefe/data` (162k latents, splits, VinDr extracted, NIH 112,120 images) (Goal 3)
 - ✅ 04-checkpoints.md — both VAE-v2 + LDM v4-60k checkpoints present and non-zero (Goal 4)
-- ⚠️ 05-path-align-creds.md — symlinks resolve (+ fixed broken scale_factor) and kaggle works; ONLY WANDB login parked (needs your key) (Goal 5)
+- ✅ 05-path-align-creds.md — symlinks resolve (+ fixed broken scale_factor), kaggle works, WANDB login accepted (Goal 5)
 - ✅ 06-verify-smoke.md — Blackwell sm_120 confirmed; 4-film generate produced non-black PNGs; DoD-6 met (Goal 6)
 - ⚠️ 07-finish-progress-track.md — blunt-check RAN (bug fixed) but blunt-rate 32% < 80% → FAIL; diagnosis parked; plan 06 stays open (Goal 7)
 - ⚠️ 08-run-and-close.md — auto-run of 03–07 DONE; `/progress-track` + `/sync-plan-tree` parked pending the plan 07 diagnosis (Goals 6+7)

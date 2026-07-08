@@ -42,16 +42,15 @@ that number is recorded honestly and NOT forced to a pass — it is your call to
   smoke test's w=4.0), or (c) instrument calibration (80° cutoff vs 70.5° median)?
   Inspect `results/vae_v2/ldm_sanity/v4_60k_final/effusion_panel.png` to judge.
   Do NOT close plan 06 until root cause is clear.
-- **05 W&B login** · secret · `WANDB_API_KEY` not set. Set it yourself and `wandb login`.
-  Not required by the smoke test or blunt-check.
 - **07 close-out (blocked on the diagnosis)** · promote plan 06 → ✅, file DoD-6 in
   `docs/DECISION_TIMELINE.md`, `/progress-track vae-v2`, `/sync-plan-tree`.
 
-## Not gate-blocking
+## Resolved since the halt
 
-- **NIH raw images** · `data.zip` (24GB) downloaded to `/datasets/mmolefe/data/nih`; images not
-  yet extracted. Not needed for the smoke test or blunt-check. `kaggle whoami` is not a valid
-  command in kaggle 2.2.3 — use `kaggle config view`.
+- **05 W&B login** · DONE — `WANDB_API_KEY` set and `wandb login` accepted (user-confirmed 2026-07-08). DoD-5 ✅.
+- **NIH raw images** · DONE — `download_nih.sh` finished: 112,120 images extracted to
+  `/datasets/mmolefe/data/nih/images/`, zip auto-removed. (`kaggle whoami` is not a command in
+  kaggle 2.2.3 — use `kaggle config view`.)
 
 ## How compute must be run on this node (for reference)
 
