@@ -87,12 +87,11 @@ fallbacks / gated extras.
 >
 > **ACTIVATED + RENAMED 2026-06-27 (augment-triage, supersedes the defer above):** arm1 clean-cardio augmentation (`gtr6kqpk`) **plateaued at the diagnostic line** (CTR flat 0.499 from 50k, presence 0.20, yield 0.125) → the escalation condition the defer was waiting on has **FIRED**. Scope promoted to **ACTIVE Scope 1** and **renamed `additional_plans/padchest-transfer/` → `additional_plans/vindr-transfer/`**. Extend via `/integrate-plans`; **mission/guardrails unchanged** — vanilla class-conditional, composition-only, keep-our-VAE, external-base-only, NIH-frozen-eval. Headline question: *is clean VinDr+NIH data enough for a vanilla conditional LDM?* PadChest stays this scope's internal headroom escalation. A new **Scope 2** (`additional_plans/spatial-conditioning/`) carries heart-mask + haze-map + decorrelation as the follow-up, **gated on Scope 1 failing the yield gate** — so the bottleneck (data vs. conditioning) is attributable to exactly one change.
 
-- **Clean-unconditional-ε anchor test.** Use a clean unconditional ε as the PoE `cfg_compose`
-  anchor instead of the ~75%-diseased `null`. *Orthogonal to PadChest — tests the CURRENT model;
-  runnable NOW outside this scope, pairs with `scripts/cfg_anchor_sweep.py` (Part 1). Could move
-  the live model's yield today.* Source: Unconditional Priors Matter (arXiv 2503.20240).
-  *Reason: not load-bearing for the PadChest scope; a do-now standalone experiment.*
-  - *source: augment compile 2026-06-26 → triage 2026-06-26*
+- ~~**Clean-unconditional-ε anchor test.**~~ **PROMOTED 2026-07-08 (triage → poe-composition scope)** — routed
+  as the first (cheapest) operator step in `additional_plans/poe-composition/` (O4), run before SuperDiff/MCMC
+  because if the ~75%-diseased `null` anchor is the problem, the fancy operators would be fixing the wrong thing.
+  Pairs with `scripts/cfg_anchor_sweep.py` (Part 1). Source: Unconditional Priors Matter (arXiv 2503.20240).
+  - *source: augment compile 2026-06-26 → triage 2026-06-26 → promoted 2026-07-08*
 
 - **LoRA + latent-replay (stage-2 fallback).** Low-rank adapter + effusion/normal replay instead
   of plain finetune. *Reason: fires only if S6 plain low-LR finetune visibly overfits the 854 or
@@ -161,6 +160,36 @@ leaf 11 only if the cheap arms (1/2) don't clear the Exp-09 gate (~0.65) / Gate-
   results land. Revisit after the after-model utility numbers are in.* Goal link: serves the
   supervisor-narrative track, parallel to the paper, not the submission itself.
   - *source: triage 2026-06-27 (post-sync)*
+
+### PoE-composition scope — Scope (NEW 2026-07-08, routed to `additional_plans/poe-composition/`)
+
+Defers from the three-augment triage (1a explain-null, 1b bottleneck, 1c alt-operators). The 8 keeps routed to
+the new scope; these four are its gated fallbacks — each fires only on a named condition, so none is scheduled.
+
+- **Concept-algebra cardio-direction injection.** The only *signal-injector* (adds heart signal the composition
+  can't produce), estimated from real single-cardio NIH films. *Reason: not plan-ready — the real single-cardio
+  pool isn't built/sized, high variance under the squashed latent, circularity risk if seeded from generated
+  cardio. Fires as the empty-ingredient fallback, gated on the #5 cardio-alone ceiling probe (near-empty) + an
+  adequate pool.* Source: Concept Algebra (arXiv 2302.03693); CASL SAE (arXiv 2601.15441).
+  - ▶ `/augment build a stable real-single-cardio direction for concept-algebra injection on v4-60k — confirm the NIH cardio-only pool is large/clean enough to estimate a low-variance score-space direction, and design the anti-circularity check (estimate from real, never from generated cardio-alone)`
+  - *source: 1c augment compile → triage 2026-07-08*
+
+- **HMC on a composed energy.** Better mixing than ULA, but needs an energy distillation/parameterization of
+  v4-60k (retrain-flavored) + leapfrog evals per step. *Reason: fires only if the #7 no-retrain corrected
+  samplers (ULA + approximate-energy MH) give ambiguous diagnostics that need hardening.* Source: Du et al.,
+  Reduce/Reuse/Recycle (arXiv 2302.11552).
+  - *source: 1a/1c augment compiles → triage 2026-07-08*
+
+- **VAE re-disentangle retrain.** Retrain the codec for a disease-separable latent. *Reason: expensive, breaks
+  the keep-our-VAE / one-latent-space guardrail, and conflicts with Exp-2 (VAE recorded faithful & reusable,
+  |ΔCTR| 0.011). Fires ONLY if the #2 separability/CAV probe shows collapse specifically at `z` with CAV mass in
+  the known dead channels — i.e. a probe demands it. Otherwise never runs.*
+  - *source: 1b augment compile → triage 2026-07-08*
+
+- **Beam / greedy search over best-of-N.** Beats plain best-of-N at equal budget. *Reason: 1c's own read — adds
+  table width, not signal. Fires only if best-of-N proves competitive and we then want to optimize it.* Source:
+  inference-time-scaling literature (2025).
+  - *source: 1c augment compile → triage 2026-07-08*
 
 ## Drop
 
