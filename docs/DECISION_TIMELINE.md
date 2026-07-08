@@ -254,12 +254,19 @@ Source: `additional_plans/vae-v2/plans/04-vae-eval-gate.md` (Gate 5),
 
 Each version fixed the failure the previous one exposed. All train in VAE-v2 μ-latent space.
 
+> ⚠️ **CORRECTION (2026-07-08) — run IDs + v1 numbers fixed.** The original table mis-labelled v1's
+> run as `mzd3jwy9` — that is actually one of the two **pre-history** sampled-latent noise runs (with
+> `gtsw5bq7`), superseded by the μ-encode fix, not a μ version — and it merged v3's peak-then-decay
+> CTR (0.521@40k→0.46) into the v1 row. Authoritative μ-run mapping (from `plans/06-ldm-retrain.md`,
+> corroborated by `tracking.md` + `plans/09-collapse-prevention.md`): **v1 `6wj35ips`, v2 `umqnrs0o`,
+> v3 `yrcj8qgl`, v4 `4vg2h5i4`**. Table below corrected; the illuminate deck (Act 3) already uses these IDs.
+
 | Ver | Run | Change from previous | Result | Verdict |
 |-----|-----|----------------------|--------|---------|
-| **v1** | `mzd3jwy9` | class-balance the mix (0.25/0.40/0.35) | cardio CTR 0.521 @40k → **regressed** to 0.46 @100k | effusion ✓, cardio not durable |
-| **v2** | `umqnrs0o` | + weight-EMA, + min-SNR, mix 0.28/0.34/0.38 | cardio **absent** (presence ~0, leaks to effusion 0.81); effusion held 0.66 | effusion ✓, cardio ✗ |
-| **v3** | `yrcj8qgl` | restore cardio share (0.20/0.40/0.40) | **both channels active**; cardio CTR 0.496, PoE yield clears 0.10 for the first time; but washed-out greyscale late | **best so far** |
-| **v4** | (current) | per-channel isotropic latents, early-stop at 60k, min-SNR off, decode ÷scale-factor fixed | crisp images, cardio held near peak | **current canonical** |
+| **v1** | `6wj35ips` | first μ retrain; mix 0.25/0.40/0.35, single global scale | cardio CTR climbed 0.445 → **0.508** (good); but **effusion collapsed** (blunting 0.38 → 0.003 by 25k) | cardio ✓, effusion ✗ → fired the rebalance |
+| **v2** | `umqnrs0o` | + weight-EMA, + min-SNR, mix 0.28/0.34/0.38 | cardio **regressed** 0.508 → **0.385** (absent, ~77% leaks to effusion); effusion held | effusion ✓, cardio ✗ → restore cardio share |
+| **v3** | `yrcj8qgl` | restore cardio share (0.20/0.40/0.40), EMA decay-warmup | **both channels active**; cardio peaked **0.521 @40k → decayed 0.457 @100k**; PoE yield clears 0.10 for the first time (0.125–0.156); washed-out greyscale late | **best so far** (two hidden bugs → v4) |
+| **v4** | `4vg2h5i4` | per-channel isotropic latents (whitening), early-stop at 60k, min-SNR off, decode ÷scale-factor fixed | crisp images, all classes render; cardio CTR **0.482** held near peak (real 0.536) | **current canonical winner** |
 
 ### [G6a] Why v2 failed — the mix starved cardio
 
@@ -286,9 +293,9 @@ entirely. Lesson: cardio needs ≥0.40 share to survive. → v3 restored it.
 - **min-SNR removed** as a non-helping confound.
 - Current canonical checkpoint: `ckpts/vae_v2_ldm_v4/model_ema_step0060000.safetensors`.
 
-Source: `tracking.md` (mzd3jwy9, umqnrs0o, yrcj8qgl blocks),
-`configs/ldm_vae_v2*.yaml`, `configs/ldm_vae_v2_v4.yaml`, memory
-`ldm-decode-scalefactor-and-recipe`.
+Source: `tracking.md` (μ-runs `6wj35ips`/`umqnrs0o`/`yrcj8qgl`/`4vg2h5i4`; `mzd3jwy9`/`gtsw5bq7`
+are the pre-history sampled-latent noise runs, not μ versions), `plans/06-ldm-retrain.md`,
+`configs/ldm_vae_v2*.yaml`, `configs/ldm_vae_v2_v4.yaml`, memory `ldm-decode-scalefactor-and-recipe`.
 
 ---
 
