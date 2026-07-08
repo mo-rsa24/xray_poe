@@ -58,7 +58,7 @@ paper question: does synthetic data help detect BOTH-disease cases when real bot
   [C] is a big heart reachable? ......... YES — best-of-8 hits 0.571 (100% >0.5); NOT capped
       │
   [VERDICT] utility gap fully closable at inference (w4 best-of-8 → detector 0.875 > real 0.806); no retrain
-            ⚠ lever comparison + verdict NOT yet woven in — final augment-probe set generating now
+            lever comparison woven in below (free-lever table + [G9a]/[G9v]); co-presence null is the headline
 ```
 
 ---
