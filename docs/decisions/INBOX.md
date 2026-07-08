@@ -60,3 +60,12 @@ _(none yet — the hook appends here when a decision artifact changes)_
 
 ### Sweep 2026-07-07 07:26 — 1 changed artifact(s)
 - [ ] `[plan-reconcile]` `additional_plans/vae-v2/MASTER_PLAN.md` changed → log/refresh this gate in DECISION_TIMELINE.md (Question / What we ran / What it said / What we decided / Fired next)
+
+### Sweep 2026-07-07 11:25 — 1 changed artifact(s)
+- [ ] `[plan-reconcile]` `additional_plans/mscluster-setup/MASTER_PLAN.md` changed → log/refresh this gate in DECISION_TIMELINE.md (Question / What we ran / What it said / What we decided / Fired next)
+
+### Sweep 2026-07-07 11:28 — 1 changed artifact(s)
+- [ ] `[plan-reconcile]` `additional_plans/mscluster-setup/MASTER_PLAN.md` changed → log/refresh this gate in DECISION_TIMELINE.md (Question / What we ran / What it said / What we decided / Fired next)
+
+### Sweep 2026-07-08 02:58 — 1 changed artifact(s)
+- [ ] `[plan-reconcile]` `additional_plans/mscluster-setup/MASTER_PLAN.md` changed → log/refresh this gate in DECISION_TIMELINE.md (Question / What we ran / What it said / What we decided / Fired next)
