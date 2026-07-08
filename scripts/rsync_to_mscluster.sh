@@ -40,8 +40,14 @@ if [ "$DRY" = "1" ]; then RFLAGS="$RFLAGS -n"; echo "*** DRY-RUN — set DRY=0 t
 # What MUST move (edit if your checkpoint paths differ):
 LATENTS=(data/latents_v2 data/latents)
 MANIFESTS=(data/splits data/vae_v2_diet data/vindr512)   # small CSVs; gitignored but needed by scripts
-CKPTS=(ckpts/vae_v2 ckpts/vae_v2_ldm_v4 ckpts/presence_classifier_finetuned.pt ckpts_arm1_cleancardio)
-SNAP=(results outputs figures)
+CKPTS=(
+  ckpts/vae_step0025000.pt                                     # v1 VAE codec
+  ckpts/vae_v2                                                 # v2 VAE codec
+  ckpts/vae_v2_ldm ckpts/vae_v2_ldm_v2 ckpts/vae_v2_ldm_v3 ckpts/vae_v2_ldm_v4  # LDM v1/v2/v3(+v4) on v2 codec
+  ckpts/presence_classifier_finetuned.pt ckpts_arm1_cleancardio)
+# Loose root files = the v1-VAE-codec LDM set (model + optimizer state, all steps)
+CKPT_GLOBS=('ckpts/model_step*.safetensors' 'ckpts/training_state_step*.pt')
+SNAP=(results outputs figures plans illuminate-output learning-captures briefs paper)
 
 run() { echo "+ rsync $RFLAGS $*"; rsync $RFLAGS "$@"; }
 
@@ -52,6 +58,7 @@ case "$MODE" in
     for p in "${LATENTS[@]}";   do [ -e "$REPO/$p" ] && run "$REPO/$p/" "$DEST_SSH:$DATA_DEST/$(basename "$p")/"   || echo "  skip (absent): $p"; done
     for p in "${MANIFESTS[@]}"; do [ -e "$REPO/$p" ] && run "$REPO/$p/" "$DEST_SSH:$DATA_DEST/$(basename "$p")/"   || echo "  skip (absent): $p"; done
     for p in "${CKPTS[@]}";     do [ -e "$REPO/$p" ] && run "$REPO/$p"  "$DEST_SSH:$CKPT_DEST/"                    || echo "  skip (absent): $p"; done
+    for g in "${CKPT_GLOBS[@]}"; do for f in $REPO/$g; do [ -e "$f" ] && run "$f" "$DEST_SSH:$CKPT_DEST/"; done; done
     [ -e "$REPO/.claude" ] && run "$REPO/.claude/" "$DEST_SSH:$PROJ_DEST/.claude/"
     if [ "$SNAPSHOT" = "1" ]; then for p in "${SNAP[@]}"; do [ -e "$REPO/$p" ] && run "$REPO/$p" "$DEST_SSH:$PROJ_DEST/"; done; fi
     ;;
@@ -62,6 +69,7 @@ case "$MODE" in
     for p in "${LATENTS[@]}";   do run "$SRC_SSH:$SRC_REPO/$p/" "$DATA_DEST/$(basename "$p")/"; done
     for p in "${MANIFESTS[@]}"; do run "$SRC_SSH:$SRC_REPO/$p/" "$DATA_DEST/$(basename "$p")/"; done
     for p in "${CKPTS[@]}";     do run "$SRC_SSH:$SRC_REPO/$p"  "$CKPT_DEST/"; done
+    for g in "${CKPT_GLOBS[@]}"; do run "$SRC_SSH:$SRC_REPO/$g" "$CKPT_DEST/"; done   # remote shell expands the glob
     run "$SRC_SSH:$SRC_REPO/.claude/" "$PROJ_DEST/.claude/"
     if [ "$SNAPSHOT" = "1" ]; then for p in "${SNAP[@]}"; do run "$SRC_SSH:$SRC_REPO/$p" "$PROJ_DEST/"; done; fi
     ;;
