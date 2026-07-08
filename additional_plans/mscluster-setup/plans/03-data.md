@@ -15,20 +15,20 @@ Reusing `/datasets/mmolefe` avoids a full re-download if the data is already the
 latents (`latents_v2/joint_perch/` present); VinDr unzipped. Manifest counts match hippo originals.
 
 ## Tasks
-- [ ] Inspect what is already on the cluster:
+- [x] ✅ Inspect what is already on the cluster: ✓ verified (`data/` has nih, latents, latents_v2, splits, vae_v2_diet, vindr512)
   ```
   ls -la /datasets/mmolefe/data /datasets/mmolefe/checkpoints
   find /datasets/mmolefe -maxdepth 3 \( -iname "Data_Entry*" -o -iname "images_0*" \)
   ```
-- [ ] Unzip VinDr (skip if already extracted):
+- [x] ✅ Unzip VinDr (skip if already extracted): ✓ verified (already extracted at `/datasets/mmolefe/vinbigdata/`: train/, train.csv present)
   ```
   unzip -n /datasets/mmolefe/vinbigdata-chest-xray-abnormalities-detection.zip -d /datasets/mmolefe/vinbigdata
   ```
-- [ ] ⚠️ Rsync latents from a box that can reach both hippo and mscluster:
+- [x] ✅ Rsync latents: Not needed — 162,004 `.pt` latents already present in `/datasets/mmolefe/data/latents_v2` (≥74k expected). Original command below left for reference:
   ```
   MODE=push DEST_SSH=mmolefe@mscluster DRY=0 bash scripts/rsync_to_mscluster.sh
   ```
-- [ ] ⚠️ Remedy (NIH absent): install kaggle CLI if missing, then run `download_nih.sh`:
+- [~] ⚠️ Remedy (NIH absent): kaggle CLI works; `download_nih.sh` ran and pulled `data.zip` (24GB) + `Data_Entry_2017.csv` into `/datasets/mmolefe/data/nih`. Image extraction still pending (`nih/images/` empty). NOT required for the smoke/blunt gates. Note: `kaggle whoami` is invalid in kaggle 2.2.3 — use `kaggle config view` instead.
   ```bash
   pip install kaggle
   mkdir -p ~/.kaggle && chmod 700 ~/.kaggle
@@ -38,10 +38,11 @@ latents (`latents_v2/joint_perch/` present); VinDr unzipped. Manifest counts mat
   kaggle whoami   # must pass before proceeding
   bash scripts/download_nih.sh /datasets/mmolefe/data/nih
   ```
-- [ ] Spot-check latent count: `find /datasets/mmolefe/data/latents_v2 -name "*.pt" | wc -l` — expect
+- [x] ✅ Spot-check latent count: ✓ verified 162,004 `.pt` files (≥74k expected).
+  `find /datasets/mmolefe/data/latents_v2 -name "*.pt" | wc -l` — expect
   ~74k+ (NIH 70,613 train + 3,715 val + VinDr 6,671).
-- [ ] Verify manifests arrived: `ls /datasets/mmolefe/data/splits/ /datasets/mmolefe/data/vae_v2_diet/ /datasets/mmolefe/data/vindr512/`
-  — `splits/` must include `cardio_not_effusion.csv`, `effusion_not_cardio.csv`, `test_patient_ids.txt`.
+- [x] ✅ Verify manifests arrived: ✓ verified — `splits/` includes `cardio_not_effusion.csv`,
+  `effusion_not_cardio.csv`, `test_patient_ids.txt`; `vae_v2_diet/` and `vindr512/` present.
 
 ## Engagement Instructions
 ```bash

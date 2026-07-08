@@ -1,8 +1,12 @@
 # large data & checkpoints — never commit these
+# /data and /ckpts are machine-specific symlinks into /datasets/mmolefe on mscluster;
+# trailing-slash patterns match dirs only, so list the bare names too to catch the symlinks
 /data/
+/data
 data.zip
 *.zip
 ckpts/
+/ckpts
 ckpts_*/
 logs/
 figures/

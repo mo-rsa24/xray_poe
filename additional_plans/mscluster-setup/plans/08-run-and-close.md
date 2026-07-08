@@ -18,9 +18,11 @@ mscluster-setup and vae-v2 master plans current.
 
 ### On mscluster110
 
-- [ ] ⚠️ Run the setup tree automatically — inspects, unzips, rsyncs, asserts env, runs smoke test
-  and `effusion_blunt_check.py`; verifies each step against its Engagement Instructions; parks the
-  judgment tasks (GitHub auth, W&B/kaggle login) for manual resolution:
+- [x] ✅ Run the setup tree automatically — DONE. Auto-ran plans 03–07: verified data (162k latents,
+  splits), checkpoints (both present), symlinks (+ fixed a broken scale_factor sub-symlink), env
+  (torch 2.11/cu130 sm_120), smoke test (4 non-black PNGs, DoD-6 met), and `effusion_blunt_check.py`
+  (after fixing an API-mismatch bug). Fixed the core env blocker: `export APPTAINER_BIND=/datasets`.
+  Parked W&B login (secret) and the blunt-rate gate (32% < 80% → diagnosis, see plan 07):
   ```
   /execute-plan-tree run additional_plans/mscluster-setup/ -- \
     auto-run the script/verifiable tasks (inspect, unzip, rsync, env-assert, smoke test, \
@@ -33,16 +35,15 @@ mscluster-setup and vae-v2 master plans current.
 
 ### Locally (laptop or hippo)
 
-- [ ] ⚠️ Resume the blocked progress-track pass now that the blunt-check has run on Blackwell —
-  promote the blunt-rate, close vae-v2 plan 06 + DoD-6, append the gate to
-  `docs/DECISION_TIMELINE.md`:
+- [ ] ⚠️ PARKED (gate failed): blunt-check ran on Blackwell but measured 32% (< 80%). Do NOT promote /
+  close plan 06. Resolve the plan 07 diagnosis first, then resume progress-track:
   ```
   /progress-track vae-v2
   ```
   Gate: blunt-rate ≥0.80 → plan 06 ✅. If blunt-rate <0.80, do NOT force a pass — record
   the number and open a diagnosis task instead (see plan 07 remedy).
 
-- [ ] ⚠️ Reconcile both scopes against repo evidence and confirm the tree is current:
+- [ ] ⚠️ PARKED (hold until diagnosis resolves): reconcile both scopes against repo evidence and confirm the tree is current:
   ```
   /sync-plan-tree
   ```

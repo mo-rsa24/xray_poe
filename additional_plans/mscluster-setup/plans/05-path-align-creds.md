@@ -13,14 +13,14 @@ The symlinks make those paths resolve to the shared dataset store without touchi
 `wandb login` succeeds. `kaggle whoami` succeeds.
 
 ## Tasks
-- [ ] ⚠️ Create top-level symlinks:
+- [x] ✅ Create top-level symlinks: ✓ verified — `data -> /datasets/mmolefe/data`, `ckpts -> /datasets/mmolefe/checkpoints` both resolve. Also FIXED a broken sub-symlink: `latents_v2/joint_perch/scale_factor.pt` pointed at a dead hippo path; repointed to local `../scale_factor_perch.pt`.
   ```
   cd /home-mscluster/mmolefe/Playground/PhD/Paper3
   ln -sfn /datasets/mmolefe/data data
   ln -sfn /datasets/mmolefe/checkpoints ckpts
   ls data/latents_v2 && ls ckpts/vae_v2_ldm_v4
   ```
-- [ ] ⚠️ Remedy (layout mismatch — top-level names differ): symlink specific subdirs instead:
+- [x] ✅ Remedy (layout mismatch): Not needed — top-level layout matched; only the one broken sub-symlink above needed repointing.
   ```
   mkdir -p data ckpts
   ln -sfn /datasets/mmolefe/data/nih data/nih
@@ -28,14 +28,13 @@ The symlinks make those paths resolve to the shared dataset store without touchi
   ln -sfn /datasets/mmolefe/checkpoints/vae_v2 ckpts/vae_v2
   ln -sfn /datasets/mmolefe/checkpoints/vae_v2_ldm_v4 ckpts/vae_v2_ldm_v4
   ```
-- [ ] Set `WANDB_API_KEY` and log in (add to `~/.bashrc` for persistence):
+- [ ] ⚠️ PARKED (needs you — secret): `WANDB_API_KEY` not set on this node and `wandb` is not logged in. Set it yourself (secret must not be auto-committed). Not required by the smoke test or blunt-check (generate.py does not use W&B). Set `WANDB_API_KEY` and log in (add to `~/.bashrc` for persistence):
   ```bash
   export WANDB_API_KEY=<your-key>        # get from wandb.ai/settings
   echo "export WANDB_API_KEY=$WANDB_API_KEY" >> ~/.bashrc
   wandb login "$WANDB_API_KEY" --relogin
   ```
-- [ ] Verify kaggle creds (needed for plan 03 NIH remedy and future downloads):
-  `ls -l ~/.kaggle/kaggle.json` (expect chmod 600); `kaggle whoami`.
+- [x] ✅ Verify kaggle creds: ✓ working — kaggle CLI (2.2.3, in `jaxstack`) successfully pulled the 24GB NIH `data.zip`, so auth is valid. Note: `kaggle whoami` is not a command in 2.2.3; use `kaggle config view`.
 
 ## Engagement Instructions
 From the repo root on mscluster:

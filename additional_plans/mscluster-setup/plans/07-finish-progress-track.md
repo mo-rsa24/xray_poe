@@ -16,20 +16,31 @@ DoD-6 filed; one gate entry appended to `docs/DECISION_TIMELINE.md`; `/progress-
 `/sync-plan-tree` both complete.
 
 ## Tasks
-- [ ] ⚠️ Run the blunt-check script:
+- [x] ✅ Run the blunt-check script: ✓ ran on Blackwell → `results/vae_v2/ldm_sanity/v4_60k_final/`
+  (`effusion_blunt_rate.txt` + `effusion_panel.png`). Had to FIX a bug first: the script read
+  `r["effusion_present"]`/`r["cp_max_angle"]` straight off `score_decoded_array`, which returns only
+  the geometry dict — those keys come from `_row_from_score`. Unpatched it reported `valid=0/200`,
+  `nan%`. Patched to route each score through `EC._row_from_score` (the same two-step the canonical
+  `evaluate_checkpoint` uses). Post-fix: **valid=200/200**.
   ```
   python scripts/effusion_blunt_check.py --n 200 --w 1.0
   ```
   Writes results to `results/vae_v2/ldm_sanity/v4_60k_final/`.
-- [ ] ⚠️ Remedy (blunt-rate < 0.80): do NOT force a pass. Record the number as-is, keep plan 06
-  marked ⚠️, and open a diagnosis task: "effusion blunt-rate below threshold — is this a rendering
-  failure or an instrument calibration issue?" Do not close plan 06 until root cause is clear.
-- [ ] If blunt-rate ≥0.80: update plan 06 (`additional_plans/vae-v2/plans/06-ldm-retrain.md`)
-  body — promote the blunt-rate result and change status to ✅.
-- [ ] File DoD-6 in `docs/DECISION_TIMELINE.md`: append a 5-part gate entry (gate name, finding,
-  decision, evidence path, date 2026-07-07) following the existing format.
-- [ ] Run `/progress-track vae-v2` to update the vae-v2 progress summary.
-- [ ] Run `/sync-plan-tree` from the repo root to roll the plan 06 ✅ up to the vae-v2 master plan.
+- [x] ⚠️ Remedy (blunt-rate < 0.80): TRIGGERED. Measured **blunt-rate = 32.0%** (< 80% mark → FAIL),
+  median CP max-angle = 70.5°, valid = 200/200, at w=1.0. Recorded as-is, NOT forced to a pass.
+  Plan 06 stays ⚠️. DIAGNOSIS TASK OPENED (needs you): the v4 effusion *classifier* evidence was
+  strong (Exp-09 synth sensitivity 0.905→0.960 PASS), yet the *geometric* CP-blunting instrument
+  reads only 32% blunted with median angle 70.5° (just under the 80° threshold). Is this (a) a real
+  rendering shortfall, (b) a CFG-weight effect — measured at w=1.0 vs the smoke test's w=4.0, or
+  (c) an instrument-calibration issue (the 80° cutoff vs a 70.5° median)? Inspect
+  `results/vae_v2/ldm_sanity/v4_60k_final/effusion_panel.png` (most-blunted montage) to judge.
+  Do not close plan 06 until root cause is clear.
+- [ ] ⚠️ PARKED (gate failed): do NOT promote plan 06 to ✅ — blunt-rate 32% < 80%. Blocked on the diagnosis above.
+- [ ] ⚠️ PARKED (needs you): file the DoD-6 gate entry in `docs/DECISION_TIMELINE.md` recording the
+  32% FAIL honestly (gate name, finding, decision-to-diagnose, evidence path, date). Left for you so the
+  timeline narrative reflects your diagnosis conclusion, not a premature close.
+- [ ] ⚠️ PARKED (dialogic + gate not passed): `/progress-track vae-v2` — would close plan 06, which is not earned.
+- [ ] ⚠️ PARKED: `/sync-plan-tree` — hold until the diagnosis resolves; nothing to roll up as ✅ yet.
 
 ## Engagement Instructions
 ```bash
