@@ -10,9 +10,9 @@ import base64
 from pathlib import Path
 
 EX = Path("results/vae_v2/exhibits")
-OUT = Path("illuminate-output"); OUT.mkdir(parents=True, exist_ok=True)
-SHA = "5bf0069"
-CONCEPTS = "../docs/concepts"
+OUT = Path("illuminate-output/decision-timeline"); OUT.mkdir(parents=True, exist_ok=True)
+SHA = "7853133"
+CONCEPTS = "../../docs/concepts"   # deck lives one level deeper than illuminate-output/
 
 
 def b64(name: str) -> str:
@@ -100,6 +100,17 @@ ACTS = [
 ]
 
 
+SLUGS = ["codec-go", "latent-collapse", "ldm-v1-v4", "cardio-fix",
+         "copresence-null", "augment-null", "effusion-close"]
+
+
+def fname(i: int) -> str:
+    return f"{i+1:02d}-{SLUGS[i]}.html"
+
+
+COLO_N = len(ACTS) + 1  # colophon page number
+
+
 def gloss_html(terms):
     if not terms:
         return ""
@@ -149,8 +160,8 @@ details code{display:block;background:var(--bg);padding:8px;border-radius:6px;ma
 
 
 def act_page(i, act):
-    prev = f'<a href="{ACTS[i-1]["id"]}.html">← {ACTS[i-1]["title"].split("—")[0].strip()}</a>' if i > 0 else '<a href="index.html">← index</a>'
-    nxt = f'<a href="{ACTS[i+1]["id"]}.html">{ACTS[i+1]["title"].split("—")[0].strip()} →</a>' if i < len(ACTS)-1 else '<a href="index.html">index →</a>'
+    prev = f'<a href="{fname(i-1)}">← {ACTS[i-1]["title"].split("—")[0].strip()}</a>' if i > 0 else '<a href="index.html">← index</a>'
+    nxt = f'<a href="{fname(i+1)}">{ACTS[i+1]["title"].split("—")[0].strip()} →</a>' if i < len(ACTS)-1 else '<a href="08-colophon.html">colophon →</a>'
     figs = act["figs"]
     figs_html = ""
     if figs:
@@ -182,23 +193,59 @@ def act_page(i, act):
 HEAD = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title}</title><style>{css}</style></head><body>{body}</body></html>"""
 
 
+def colophon_page():
+    concepts = " · ".join(f'<a href="{CONCEPTS}/{s}.md">{s}</a>'
+                          for s in ["ctr", "pspnet", "cfg-guidance", "poe-composition",
+                                    "presence-classifier", "best-of-n", "grad-cam", "metrics"])
+    return f"""<div class="wrap">
+<div class="top"><span class="gate">colophon</span><span class="gate">{COLO_N}/{COLO_N}</span></div>
+<h1>Colophon — how this deck was built</h1>
+<div class="summary">Every headline number is read from a committed CSV; every proof image is drawn by the instrument named in its caption. Nothing here is hand-set.</div>
+<p class="body"><b>Source.</b> Rendered from <code>docs/DECISION_TIMELINE.md</code> and <code>docs/concepts/*.md</code> at git <b>{SHA}</b>.
+Numbers verified against <code>results/</code> CSVs (self-consistency pass). Figures are stored as paths in the canonical doc and base64-inlined here so each page is a single portable file.</p>
+<p class="body"><b>Exhibits &amp; repro.</b> Charts: <code>python scripts/build_exhibit_pack.py</code> (from
+<code>ctr_vs_detector_v4/per_sample.csv</code>, <code>cardio_enhance/compare_levers.csv</code>,
+<code>ldm_sanity/v4_60k_wsweep/wsweep_summary.csv</code>). Overlays: <code>python scripts/build_exhibit_overlays.py</code>
+(PSPNet CTR/CP via <code>ctr_overlay.py</code>, GradCAM via <code>grad_cam_utils.py</code>). Deck: <code>python scripts/build_illuminate.py</code>.</p>
+<p class="body"><b>Honest caveats.</b> Effusion never reaches the ≥80% geometric blunt bar (max 66% at w=7); plan 06 was closed recording this as a known limitation, not a pass. Co-presence is a mechanistic null (2.6% « 30%). Single-disease sets (best-of-8 cardio, native effusion) are usable downstream.</p>
+<div class="concepts">Instruments: {concepts}</div>
+<div class="nav"><a href="{fname(len(ACTS)-1)}">← {ACTS[-1]["title"].split("—")[0].strip()}</a><a href="index.html">index →</a></div>
+<div class="foot">vae-v2 decision timeline · git {SHA}</div>
+</div>"""
+
+
 def build():
+    import json
     for i, act in enumerate(ACTS):
         html = HEAD.format(title=act["title"], css=CSS, body=act_page(i, act))
-        (OUT / f"{act['id']}.html").write_text(html)
+        (OUT / fname(i)).write_text(html)
+    (OUT / "08-colophon.html").write_text(HEAD.format(title="Colophon", css=CSS, body=colophon_page()))
     # index
     items = "".join(
-        f'<li><a href="{a["id"]}.html">{a["title"]}</a><span class="g">{a["gate"]} · {a["headline"]}</span></li>'
-        for a in ACTS)
+        f'<li><a href="{fname(i)}">{a["title"]}</a><span class="g">{a["gate"]} · {a["headline"]}</span></li>'
+        for i, a in enumerate(ACTS))
     idx_body = f"""<div class="wrap">
 <div class="top"><span class="gate">vae-v2</span><span class="gate">git {SHA}</span></div>
 <h1>VAE-v2: from a sharper codec to a mechanistic null</h1>
 <div class="summary">A plain-language walk through the decisions: rebuild the codec, retrain the diffusion model, fix cardiomegaly at inference, and land the headline finding — two diseases will not co-occur in a composed film.</div>
-<ol class="idx">{items}</ol>
+<ol class="idx">{items}<li><a href="08-colophon.html">Colophon — how this deck was built</a><span class="g">provenance · repro</span></li></ol>
 <div class="foot">Every headline number is backed by a chart from the actual CSV and a proof image with the instrument drawn on it. Instruments defined under docs/concepts/. git {SHA}.</div>
 </div>"""
     (OUT / "index.html").write_text(HEAD.format(title="VAE-v2 decision timeline", css=CSS, body=idx_body))
-    print("wrote", len(ACTS) + 1, "pages to", OUT)
+    # manifest (matches the sibling decks' sequence.json convention)
+    seq = {
+        "series": "Decision Timeline (vae-v2, exhibit build)",
+        "slug": "decision-timeline",
+        "source": ["docs/DECISION_TIMELINE.md", "docs/concepts/*.md", "results/vae_v2/exhibits/*.png"],
+        "argument": "Rebuild the codec and the diffusion model, fix cardiomegaly at inference (best-of-8 0.875 > real 0.806), and land the headline mechanistic null: two diseases will not co-occur in a composed film (2.6% « 30%). Effusion renders but the geometric blunt bar is unmet; plan 06 closed with that caveat.",
+        "git_sha": SHA,
+        "pages": [{"index": i + 1, "filename": fname(i), "title": a["title"], "gate": a["gate"], "headline": a["headline"]}
+                  for i, a in enumerate(ACTS)] + [{"index": COLO_N, "filename": "08-colophon.html", "title": "Colophon"}],
+        "theme": "theme-aware (prefers-color-scheme + data-theme override)",
+        "notes": "Exhibits base64-inlined (per the exhibit-pack build); regenerate via scripts/build_illuminate.py after scripts/build_exhibit_pack.py + build_exhibit_overlays.py.",
+    }
+    (OUT / "sequence.json").write_text(json.dumps(seq, indent=2))
+    print("wrote", len(ACTS) + 2, "pages + sequence.json to", OUT)
     for p in sorted(OUT.glob("*.html")):
         print("  ", p.name, f"{p.stat().st_size//1024}K")
 
