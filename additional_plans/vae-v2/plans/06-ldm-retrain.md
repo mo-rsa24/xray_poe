@@ -119,7 +119,7 @@ hypothesis first; escalate to the VAE re-fine-tune ONLY if the 5k grid is noisy/
   - **VAE implicated** (v4 also fails, or the deferred round-trip shows the VAE under-encodes a disease
     feature): escalate to **plan 09 Task 5** — VAE re-fine-tune (KL/free-bits), then re-run 04 Gate-5 → 05 → 06.
 
-- [ ] ⚠️ **Sanity overlays for v4-60k — effusion blunt-rate check remains** (cardio parts done)
+- [x] ✅ **Sanity overlays for v4-60k — effusion blunt-rate recorded, plan CLOSED with caveat (2026-07-08)** (cardio parts done)
   - **✓ Already verified (2026-07-03, on disk):** (a) cardiac border readable + (b) no lower-chest whiteout in cardio — `results/vae_v2/health_check/v4_60k_cfg_w{1,2,3}.png` (coherent v4-60k cardio panels); cardio heart-size measured — `results/section4/ctr_vs_detector_v4/per_sample.csv` (CTR median 0.482); effusion renders + passes the body gate — `results/exp09_individual/verdict.md` (v4 effusion synth sens 0.905→0.960 PASS). Cardio's small hearts are the finding, carried to plan 07-ldm-enhance — not a rendering failure.
   - **Remaining slice — effusion costophrenic-blunting overlay:** run the effusion blunt-rate check on generated effusion films from v4-60k (blunting ≥ 80% of samples). Save to `results/vae_v2/ldm_sanity/v4_60k_final/`.
     - **STATUS 2026-07-07:** script written and ready (`scripts/effusion_blunt_check.py`); run **BLOCKED on hippo**
@@ -147,7 +147,7 @@ hypothesis first; escalate to the VAE re-fine-tune ONLY if the 5k grid is noisy/
       and is consistent with Exp-09's strong classifier PASS. **Per the plan-06 rule, NOT forced to a pass.**
       Next: diagnostic CFG-weight sweep (w=1,2,4,7; the smoke test used w=4.0) to separate "weak at low
       guidance" from "genuine rendering shortfall", and decide whether the pass-mark should be judged at
-      w=1.0 at all. See timeline gate [G6d]. **This task stays `- [ ]` open until that resolves.**
+      w=1.0 at all. See timeline gate [G6d]. (RESOLVED 2026-07-08 by the CFG sweep + DECISION below — [G6e]/[G6f].)
     - **CFG-SWEEP RESULT 2026-07-08 (`results/vae_v2/ldm_sanity/v4_60k_wsweep/`, gate [G6e]):** controlled
       sweep w∈{1,2,4,7}, effusion-only, n=200, same seed. Clean monotonic dose-response —
       w=1: **32.0%** (median CP 70.5°) · w=2: **44.5%** (77.0°) · w=4: **57.8%** (84.0°) · w=7: **66.3%** (94.0°).
@@ -158,7 +158,16 @@ hypothesis first; escalate to the VAE re-fine-tune ONLY if the 5k grid is noisy/
       (a) accept as a known limitation and close with caveat (effusion is classifier-detectable, Exp-09 PASS;
       median blunts at w≥4), (b) carry to plan 07-ldm-enhance as a rendering target, or (c) revise the
       acceptance criterion. Plan 06 stays open pending this call.
-  - **Verify:** overlays visually show costophrenic blunting in generated effusion samples (parts a/b already confirmed above via the health-check panels). Effusion-only blunt-rate: 32% @w=1 → 66% @w=7 (never ≥80%); open pending the accept/carry/revise decision above.
+    - **DECISION 2026-07-08 (CLOSE with caveat — gate [G6f]):** plan 06 closed. Rationale: (1) the master
+      DoD-6 requirement is "border-readable hearts + W&B linked", both met — the effusion-only blunt overlay
+      was an extra sanity artifact, now filed; (2) effusion is classifier-detectable — Exp-09 sens 0.865–0.960
+      PASS (08 verdict), and the co-presence downstream verdict (08) is already filed (NO-GO), so nothing
+      downstream hinges on the geometric ≥80% bar; (3) the blunt-rate is guidance-responsive real morphology
+      (32%@w1 → 66%@w7, median film blunts at w≥4), the SAME class of characterized rendering property as the
+      cardio small-hearts finding that plan 07 already resolved at w4 best-of-8. The residual (never ≥80% of
+      samples geometrically blunted) is recorded as a **known limitation**, NOT forced to a pass and NOT a
+      blocker. No open remediation: plan 07 (enhance) and 08 (downstream) are already closed.
+  - **Verify:** ✅ effusion blunting confirmed as guidance-responsive real morphology (curve 32%@w1 → 66%@w7, median blunts at w≥4; panels in `results/vae_v2/ldm_sanity/v4_60k_wsweep/`). Geometric ≥80%-of-samples bar recorded as unmet (known limitation), classifier-level effusion PASS via Exp-09. Plan closed with caveat.
 
 ## Recommended skill
 — custom; same pattern as existing `plans/rebalanced-cardio-retrain/`. Monitor via W&B `exp_vae_v2_ldm`.

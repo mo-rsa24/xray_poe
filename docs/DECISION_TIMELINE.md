@@ -833,6 +833,32 @@ worry, but the mechanism is subtly different — worth stating precisely.
 
 ---
 
+### [G6f] DECISION: close plan 06 with the effusion blunt-rate as a recorded caveat, not a pass  → see [cfg-guidance]
+
+- **Question.** Given [G6e] (effusion blunt-rate is guidance-responsive but never reaches the ≥80%
+  bar), what do we do with plan 06 — accept and close, carry to an enhancement plan, or revise the
+  criterion?
+- **What we ran.** No new compute — a reconciliation of the evidence against the tree. Checked what
+  the vae-v2 master actually requires (DoD-6 = "border-readable hearts + W&B linked", both met; the
+  effusion-only blunt overlay is an extra sanity artifact, not a DoD-6 gate), and the state of the
+  downstream plans (07-ldm-enhance CLOSED — cardio bigger-hearts target MET at w4 best-of-8;
+  08-downstream-eval CLOSED — Exp-09 effusion sens 0.865 PASS, Exp-03 co-presence NO-GO already filed).
+- **What it said.** Nothing downstream hinges on the geometric ≥80% blunt-rate: effusion is
+  classifier-detectable and the co-presence verdict is already recorded. The blunt-rate shortfall is
+  the same class of characterized rendering property as the cardio small-hearts finding, which plan 07
+  resolved inference-only at w4 — not a blocker in either case.
+- **What we decided.** **Close plan 06 with a caveat, do NOT force a pass, do NOT reopen 07/08.** The
+  effusion blunt-rate is filed as a recorded curve (32%@w1 → 66%@w7, median film blunts at w≥4) with a
+  known-limitation caveat, mirroring how cardio CTR was handled. Rejected a criterion-revision that
+  would manufacture a pass (even the best reframe is 66% at w=7). vae-v2 plan 06 → ✅ (closed with
+  caveat); vae-v2 DoD-6 → ✅. This also completes the mscluster-setup finish-progress-track objective;
+  its DoD-7 "blunt-rate ≥0.80" sub-clause is **superseded** by this decision (recorded-as-curve), the
+  progress-track + sync steps being the actual completion.
+- **Fired next.** `/sync-plan-tree` to roll plan 06 ✅ up both the vae-v2 and mscluster-setup masters.
+  vae-v2 scope is now fully closed (all plans ✅; downstream verdict = co-presence null).
+
+---
+
 ## How this log is maintained (supersession, not deletion)
 
 A decision log is only useful if it's honest about the paths that turned out wrong — the

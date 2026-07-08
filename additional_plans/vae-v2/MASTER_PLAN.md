@@ -73,8 +73,10 @@ re-encode ~1.5 hrs + LDM retrain ~5.5 hrs + eval headroom).
 5. ✅ NIH+VinDr re-encode complete as μ (encode_moments) — sampled cache was invalidated by
    VAE-v2 posterior collapse (3.6% signal); redone μ (NIH 70,613 + val 3,715, VinDr 6,671,
    std ~0.20, sf 5.034); integrity + signal-fraction logged; V1 cache preserved.
-6. LDM retrain complete — 100k steps from scratch; sanity overlays show border-readable
-   hearts; W&B run linked.
+6. ✅ LDM retrain complete — 100k steps from scratch; sanity overlays show border-readable
+   hearts; W&B run linked. v4-60k `4vg2h5i4` is the winning LDM. Effusion blunt-rate sanity
+   filed 2026-07-08 (guidance-responsive: 32%@w1→66%@w7, median blunts at w≥4; classifier-PASS
+   Exp-09 0.865); geometric ≥80% bar recorded as a known limitation, not a blocker — [G6f].
 7. ✅ Downstream gates evaluated — Exp-09 sens + Gate-3 yield reported vs targets;
    outcome filed (recovered / null / inconclusive); pre-registration table row updated.
    → Exp-09 recovered (cardio 0.875 via 07 fix, effusion 0.865); Exp-03 co-presence NULL (2.6% « 30%,
@@ -96,11 +98,11 @@ Dependency order: `01 → 02 → 03 → 04 → 05 → 06 → 09 → 07 → 08`
   gates pass with margin) + Gate 5 posterior-collapse resolved (μ-encode); timeline [G5a]/[G5b] (Goal 4)
 - ✅ 05-ldm-reencode.md — re-encode NIH + VinDr latents as μ (encode_moments) under frozen
   VAE-v2; sampled cache was invalidated by posterior collapse, redone μ (Goal 5)
-- ⚠️ 06-ldm-retrain.md — full LDM retrain in VAE-v2 μ-latent space (Goal 6). v1→v4 iteration DONE;
+- ✅ 06-ldm-retrain.md — full LDM retrain in VAE-v2 μ-latent space (Goal 6). v1→v4 iteration DONE;
   **v4-60k `4vg2h5i4` per-channel-whitening is the winning LDM** (all classes render, validated in Acts 6–9,
-  used by every downstream result). Timeline Act 6. ⚠️ pending ONE minor sanity artifact — the effusion
-  blunt-rate overlay (`scripts/effusion_blunt_check.py`, GPU-blocked 2026-07-07); effusion blunting already
-  evidenced indirectly (Exp-09 sens 0.96, Exp-03 CP)
+  used by every downstream result). Timeline Act 6. Effusion blunt-rate overlay RAN on mscluster110 Blackwell
+  (2026-07-08): guidance-responsive real morphology, 32%@w1→66%@w7, median film blunts at w≥4; geometric
+  ≥80% bar recorded as a known limitation (not forced, not a blocker). Closed with caveat — [G6e]/[G6f]
 - ✅ 07-ldm-enhance.md — cardio "bigger hearts" utility push on v4-60k: diagnostics A/B/C DONE
   (data is good, model under-draws, big hearts reachable) → free inference-only fix, no retrain;
   target MET — synth-cardio detector sens 0.875 > real 0.806 via w4 best-of-8 (/augment retired,
