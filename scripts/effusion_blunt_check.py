@@ -59,10 +59,14 @@ def main() -> None:
     seg, idx = C._load_seg(str(dev))
 
     imgs = generate_disease(unet, vae, sf, EFFUSION, args.n, args.w, "null", args.steps, args.seed, dev)
-    res = [EC.score_decoded_array(seg, idx, _g512(im), str(dev)) for im in imgs]
-    # failed segmentations return a minimal dict lacking these keys → count as NaN (excluded from rate)
-    eff = np.array([float(r["effusion_present"]) if "effusion_present" in r else np.nan for r in res], dtype=float)
-    cp = np.array([r.get("cp_max_angle", float("nan")) for r in res], dtype=float)
+    # score_decoded_array returns the geometry dict; _row_from_score derives effusion_present /
+    # cp_max_angle from it (the same two-step the canonical evaluate_checkpoint uses). Images whose
+    # CP angle could not be read (segmentation failed) have cp_max_angle=NaN and are excluded.
+    scores = [EC.score_decoded_array(seg, idx, _g512(im), str(dev)) for im in imgs]
+    res = [EC._row_from_score(m) for m in scores]
+    cp = np.array([r["cp_max_angle"] for r in res], dtype=float)
+    eff = np.array([float(r["effusion_present"]) if np.isfinite(c) else np.nan
+                    for r, c in zip(res, cp)], dtype=float)
     valid = np.isfinite(cp)
     blunt_rate = float(np.nanmean(eff))
 
