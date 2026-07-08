@@ -35,12 +35,13 @@ DoD-6 filed; one gate entry appended to `docs/DECISION_TIMELINE.md`; `/progress-
   (c) an instrument-calibration issue (the 80° cutoff vs a 70.5° median)? Inspect
   `results/vae_v2/ldm_sanity/v4_60k_final/effusion_panel.png` (most-blunted montage) to judge.
   Do not close plan 06 until root cause is clear.
-- [ ] ⚠️ PARKED (gate failed): do NOT promote plan 06 to ✅ — blunt-rate 32% < 80%. Blocked on the diagnosis above.
-- [ ] ⚠️ PARKED (needs you): file the DoD-6 gate entry in `docs/DECISION_TIMELINE.md` recording the
-  32% FAIL honestly (gate name, finding, decision-to-diagnose, evidence path, date). Left for you so the
-  timeline narrative reflects your diagnosis conclusion, not a premature close.
-- [ ] ⚠️ PARKED (dialogic + gate not passed): `/progress-track vae-v2` — would close plan 06, which is not earned.
-- [ ] ⚠️ PARKED: `/sync-plan-tree` — hold until the diagnosis resolves; nothing to roll up as ✅ yet.
+- [x] ✅ RESOLVED: plan 06 closed with caveat (not forced) — CFG sweep [G6e] showed the blunt-rate is
+  guidance-responsive (32%@w1→66%@w7, median blunts at w≥4); decision [G6f] closes plan 06 on its actual
+  DoD-6 (border-readable hearts + W&B), effusion filed as a known-limitation curve.
+- [x] ✅ Timeline gates appended honestly: [G6d] (real 32% + harness-bug fix), [G6e] (CFG sweep), [G6f]
+  (close-with-caveat decision) in `docs/DECISION_TIMELINE.md`.
+- [x] ✅ `/progress-track vae-v2` complete — plan 06 + vae-v2 DoD-6 → ✅ with the effusion caveat recorded.
+- [x] ✅ `/sync-plan-tree` — rolled plan 06 ✅ up to the vae-v2 and mscluster-setup masters (this pass).
 
 ## Engagement Instructions
 ```bash

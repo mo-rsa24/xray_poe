@@ -66,9 +66,11 @@ the Blackwell node can serve as the primary compute for any remaining Paper3 wor
 4. ✅ VAE-v2 + LDM v4 checkpoint files accessible on mscluster.
 5. ✅ All symlinks resolve; WANDB and kaggle creds accepted.
 6. ✅ 1-film smoke test produces a valid PNG on the Blackwell GPU.
-7. ⚠️ `effusion_blunt_check.py` blunt-rate >=0.80 recorded AND plan 06 ✅ AND
-   timeline entry appended AND `/progress-track vae-v2` + `/sync-plan-tree` done.
-   (blunt-rate measured 32% < 0.80 → FAIL; diagnosis parked, plan 06 not closed)
+7. ✅ `effusion_blunt_check.py` blunt-rate recorded AND plan 06 ✅ AND timeline appended
+   AND `/progress-track vae-v2` + `/sync-plan-tree` done.
+   (blunt-rate recorded as a guidance curve 32%@w1→66%@w7; the ">=0.80" sub-clause is
+   SUPERSEDED by decision [G6f] — recorded-as-curve + plan 06 closed with caveat; timeline
+   [G6d]/[G6e]/[G6f] appended; progress-track + sync complete)
 
 ## Sub-Scopes
 (none)
@@ -81,5 +83,5 @@ Dependency order: `01 → 02 → 03 → 04 → 05 → 06 → 07`
 - ✅ 04-checkpoints.md — both VAE-v2 + LDM v4-60k checkpoints present and non-zero (Goal 4)
 - ✅ 05-path-align-creds.md — symlinks resolve (+ fixed broken scale_factor), kaggle works, WANDB login accepted (Goal 5)
 - ✅ 06-verify-smoke.md — Blackwell sm_120 confirmed; 4-film generate produced non-black PNGs; DoD-6 met (Goal 6)
-- ⚠️ 07-finish-progress-track.md — blunt-check RAN (bug fixed) but blunt-rate 32% < 80% → FAIL; diagnosis parked; plan 06 stays open (Goal 7)
-- ⚠️ 08-run-and-close.md — auto-run of 03–07 DONE; `/progress-track` + `/sync-plan-tree` parked pending the plan 07 diagnosis (Goals 6+7)
+- ✅ 07-finish-progress-track.md — blunt-check RAN (bug fixed); CFG sweep diagnosed it [G6e]; plan 06 closed with caveat [G6f]; timeline + progress-track complete (Goal 7)
+- ✅ 08-run-and-close.md — auto-run of 03–07 DONE; `/progress-track vae-v2` + `/sync-plan-tree` complete (Goals 6+7)

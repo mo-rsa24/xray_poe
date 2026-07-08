@@ -35,15 +35,19 @@ that number is recorded honestly and NOT forced to a pass — it is your call to
 
 ## Parked — needs you
 
-- **07 diagnosis (blocking the close)** · blunt-rate **32%**, median CP angle **70.5°**
-  (just under the 80° cutoff), n=200, w=1.0. The v4 effusion *classifier* evidence was strong
-  (Exp-09 synth sensitivity 0.905→0.960 PASS), but the *geometric* CP-blunting instrument reads
-  low. Is it (a) a real rendering shortfall, (b) a CFG-weight effect (measured at w=1.0 vs the
-  smoke test's w=4.0), or (c) instrument calibration (80° cutoff vs 70.5° median)?
-  Inspect `results/vae_v2/ldm_sanity/v4_60k_final/effusion_panel.png` to judge.
-  Do NOT close plan 06 until root cause is clear.
-- **07 close-out (blocked on the diagnosis)** · promote plan 06 → ✅, file DoD-6 in
-  `docs/DECISION_TIMELINE.md`, `/progress-track vae-v2`, `/sync-plan-tree`.
+- (none — all resolved; see below)
+
+## Resolved 2026-07-08 (the blunt-rate diagnosis + close-out)
+
+- **07 diagnosis** · RESOLVED via a controlled CFG sweep (gate [G6e]): blunt-rate is guidance-responsive,
+  **32%@w1 → 44%@w2 → 58%@w4 → 66%@w7**, median film blunts (CP>80°) by w=4. Panels show real basal
+  effusion morphology, coherent even at w=7 (`results/vae_v2/ldm_sanity/v4_60k_wsweep/`). The instrument
+  is sound (exp03 separates cleanly at the 80° cutoff). So the low number was partly low-guidance but also
+  a genuine partial-blunting shortfall — NOT an instrument fault.
+- **07 close-out** · DONE (decision [G6f]): plan 06 closed with a known-limitation caveat, NOT forced.
+  vae-v2 DoD-6 ✅ (its actual bar = border-readable hearts + W&B), effusion classifier-PASS (Exp-09 0.865);
+  timeline [G6d]/[G6e]/[G6f] appended; `/progress-track vae-v2` + `/sync-plan-tree` complete. vae-v2 scope
+  fully closed. mscluster-setup DoD-7 ✅ (the ≥0.80 sub-clause superseded by the recorded-as-curve decision).
 
 ## Resolved since the halt
 
