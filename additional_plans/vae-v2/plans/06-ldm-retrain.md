@@ -120,7 +120,7 @@ hypothesis first; escalate to the VAE re-fine-tune ONLY if the 5k grid is noisy/
     feature): escalate to **plan 09 Task 5** — VAE re-fine-tune (KL/free-bits), then re-run 04 Gate-5 → 05 → 06.
 
 - [x] ✅ **Sanity overlays for v4-60k — effusion blunt-rate recorded, plan CLOSED with caveat (2026-07-08)** (cardio parts done)
-  - **✓ Already verified (2026-07-03, on disk):** (a) cardiac border readable + (b) no lower-chest whiteout in cardio — `results/vae_v2/health_check/v4_60k_cfg_w{1,2,3}.png` (coherent v4-60k cardio panels); cardio heart-size measured — `results/section4/ctr_vs_detector_v4/per_sample.csv` (CTR median 0.482); effusion renders + passes the body gate — `results/exp09_individual/verdict.md` (v4 effusion synth sens 0.905→0.960 PASS). Cardio's small hearts are the finding, carried to plan 07-ldm-enhance — not a rendering failure.
+  - **✓ Already verified (2026-07-03, on disk):** (a) cardiac border readable + (b) no lower-chest whiteout in cardio — `results/vae_v2/health_check/v4_60k_cfg_w{1,2,3}.png` (coherent v4-60k cardio panels); cardio heart-size measured — `results/section4/ctr_vs_detector_v4/per_sample.csv` (CTR median 0.482); effusion renders + passes the body gate — final effusion synth sens **0.865 PASS** (`results/vae_v2/downstream_eval/verdict.md`; earlier per-model `exp09_individual` passes read 0.905/0.960). Cardio's small hearts are the finding, carried to plan 07-ldm-enhance — not a rendering failure.
   - **Remaining slice — effusion costophrenic-blunting overlay:** run the effusion blunt-rate check on generated effusion films from v4-60k (blunting ≥ 80% of samples). Save to `results/vae_v2/ldm_sanity/v4_60k_final/`.
     - **STATUS 2026-07-07:** script written and ready (`scripts/effusion_blunt_check.py`); run **BLOCKED on hippo**
       — the GPU stayed fully occupied by another process (31.7/32.6 GB) for 2h+ straight; a 2-hour auto-poller
@@ -128,7 +128,7 @@ hypothesis first; escalate to the VAE re-fine-tune ONLY if the 5k grid is noisy/
       `python scripts/effusion_blunt_check.py` there; it's the finish-progress-track step of the mscluster-setup
       scope. This is the ONLY thing left in plan 06.
     - **Indirect evidence effusion blunting already works** (this artifact just files the dedicated geometric
-      check): Exp-09 v4 effusion synth sensitivity **0.905→0.960 PASS** (`results/exp09_individual/verdict.md`),
+      check): Exp-09 v4 effusion synth sensitivity **0.865 PASS** (final downstream verdict; earlier per-model passes 0.905/0.960),
       and the Exp-03 co-presence run reads CP corner-blunting per composed film (`exp03_results.csv`,
       `cp_max_angle` column). So DoD-6's "blunted effusion corners" is supported; only the effusion-only overlay
       artifact is missing.
@@ -160,7 +160,7 @@ hypothesis first; escalate to the VAE re-fine-tune ONLY if the 5k grid is noisy/
       acceptance criterion. Plan 06 stays open pending this call.
     - **DECISION 2026-07-08 (CLOSE with caveat — gate [G6f]):** plan 06 closed. Rationale: (1) the master
       DoD-6 requirement is "border-readable hearts + W&B linked", both met — the effusion-only blunt overlay
-      was an extra sanity artifact, now filed; (2) effusion is classifier-detectable — Exp-09 sens 0.865–0.960
+      was an extra sanity artifact, now filed; (2) effusion is classifier-detectable — Exp-09 sens 0.865
       PASS (08 verdict), and the co-presence downstream verdict (08) is already filed (NO-GO), so nothing
       downstream hinges on the geometric ≥80% bar; (3) the blunt-rate is guidance-responsive real morphology
       (32%@w1 → 66%@w7, median film blunts at w≥4), the SAME class of characterized rendering property as the

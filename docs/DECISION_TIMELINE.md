@@ -795,7 +795,8 @@ worry, but the mechanism is subtly different — worth stating precisely.
 - **What we decided.** Do NOT force a pass and do NOT close plan 06. Recorded 32% as-is. The diagnosis
   points to effusion **rendering strength at low guidance (w=1.0)**, not an instrument failure:
   conditioning shifts the corner but weakly. Consistent with the strong classifier evidence (Exp-09 v4
-  effusion synth sensitivity 0.905→0.960 PASS, [G6c] family) — the disease is present, just not
+  effusion synth sensitivity 0.865 PASS — final downstream verdict; earlier per-model passes read
+  0.905/0.960 — [G6c] family) — the disease is present, just not
   geometrically pronounced at w=1.0. Plan 06 stays ⚠️ open; DoD item 7 stays open.
 - **Fired next.** A diagnostic CFG-weight sweep (w = 1, 2, 4, 7 at n=200; the plan-06 smoke test used
   w=4.0) to separate "weak at low guidance" from "genuine rendering shortfall", and a decision on
@@ -824,7 +825,7 @@ worry, but the mechanism is subtly different — worth stating precisely.
   guidance-responsive effusion), but not merely that — the geometric ≥80% blunt-rate bar is unmet even
   at aggressive w=7. Still NOT forcing a pass; plan 06 stays ⚠️ open. This is now a scoped decision for
   the human: (a) accept a known partial-geometric-blunting limitation and close plan 06 with that caveat
-  (effusion is classifier-detectable — Exp-09 0.905→0.960 PASS — and the median film blunts at w≥4);
+  (effusion is classifier-detectable — Exp-09 sens 0.865 PASS, final downstream verdict — and the median film blunts at w≥4);
   (b) carry effusion blunting to plan 07-ldm-enhance as a rendering target alongside the cardio
   small-hearts finding; or (c) revise the acceptance criterion (≥80% at w=1.0 vs median-blunts-at-
   deployment-guidance).
