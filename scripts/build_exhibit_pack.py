@@ -53,27 +53,28 @@ def chart_blunt_curve():
 
 
 def chart_detector_bar():
-    """best-of-8 lifts cardio detector sensitivity above real. Verified levers only.
+    """Full per-lever cardio detector sensitivity (cardio_enhance/compare_levers.csv, n=160/arm).
 
-    Sources (downstream_eval/verdict.md, reconciled): default cardio sens 0.365,
-    best-of-8 0.875, real 0.806. w4/w6 per-lever detector-sens are NOT in a clean CSV
-    (guidance sweep tracks PoE yield, not single-disease detector sens) -> omitted,
-    not fabricated. Flagged on the chart.
+    Every free inference lever's detector sensitivity is in this CSV — guidance ramps the score
+    (w1 0.35 -> w4 0.63 -> w6 0.75) and best-of-8 (w4) tops out at 0.875, above real 0.806.
     """
-    levers = ["default\n(w=1)", "best-of-8\n(w=4)", "real"]
-    sens = [0.365, 0.875, 0.806]
-    colors = ["#d95f0e", "#31a354", "#2c7fb8"]
-    fig, ax = plt.subplots(figsize=(6, 4))
-    bars = ax.bar(levers, sens, color=colors)
+    d = pd.read_csv("results/section4/cardio_enhance/compare_levers.csv").set_index("arm")
+    order = [("w1_null", "w=1"), ("w4_null", "w=4"), ("w6_null", "w=6"),
+             ("w4_bo8", "best-of-8\n(w=4)"), ("REAL_cardio", "real")]
+    labels = [l for _, l in order]
+    sens = [float(d.loc[a, "detector_sens"]) for a, _ in order]
+    colors = ["#fdae6b", "#f16913", "#d94801", "#31a354", "#2c7fb8"]
+    fig, ax = plt.subplots(figsize=(6.4, 4))
+    bars = ax.bar(labels, sens, color=colors)
     for b, s in zip(bars, sens):
         ax.annotate(f"{s:.3f}", (b.get_x() + b.get_width()/2, s), textcoords="offset points",
                     xytext=(0, 4), ha="center", fontsize=9)
     ax.axhline(0.80, color="grey", ls="--", lw=1.2, label="pass mark 0.80")
     ax.set_ylim(0, 1); ax.set_ylabel("synth-cardio detector sensitivity")
-    ax.set_title("best-of-8 rejection sampling lifts cardio above real, no retrain\n(v4-60k; w4/w6 per-lever sens not in a clean CSV — omitted)")
+    ax.set_title("Cardio detector sensitivity per free inference lever\n(v4-60k, n=160/arm; guidance ramps it, best-of-8 clears real)")
     ax.legend(fontsize=8)
     fig.tight_layout(); fig.savefig(OUT / "chart_detector_bar.png", dpi=130); plt.close(fig)
-    return "detector: default 0.365 -> best-of-8 0.875 > real 0.806"
+    return f"detector: w1 {sens[0]:.2f} -> w4 {sens[1]:.2f} -> w6 {sens[2]:.2f} -> best-of-8 {sens[3]:.3f} > real {sens[4]:.3f}"
 
 
 if __name__ == "__main__":
