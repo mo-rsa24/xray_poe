@@ -148,7 +148,17 @@ hypothesis first; escalate to the VAE re-fine-tune ONLY if the 5k grid is noisy/
       Next: diagnostic CFG-weight sweep (w=1,2,4,7; the smoke test used w=4.0) to separate "weak at low
       guidance" from "genuine rendering shortfall", and decide whether the pass-mark should be judged at
       w=1.0 at all. See timeline gate [G6d]. **This task stays `- [ ]` open until that resolves.**
-  - **Verify:** overlays visually show costophrenic blunting in generated effusion samples (parts a/b already confirmed above via the health-check panels). Effusion-only blunt-rate at w=1.0 = 32% (FAIL) — open pending the CFG-sweep diagnosis.
+    - **CFG-SWEEP RESULT 2026-07-08 (`results/vae_v2/ldm_sanity/v4_60k_wsweep/`, gate [G6e]):** controlled
+      sweep w∈{1,2,4,7}, effusion-only, n=200, same seed. Clean monotonic dose-response —
+      w=1: **32.0%** (median CP 70.5°) · w=2: **44.5%** (77.0°) · w=4: **57.8%** (84.0°) · w=7: **66.3%** (94.0°).
+      Guidance genuinely drives blunting (median film crosses 80° by w=4), and the most-blunted panels show
+      real basal effusion morphology, coherent even at w=7 — NOT an instrument artifact. **But the ≥80% bar
+      is unmet at every tested w (max 66.3% at w=7).** So the low number is partly low-guidance, but not only:
+      there is a genuine partial-geometric-blunting shortfall. **DECISION NEEDED (not auto-resolved):**
+      (a) accept as a known limitation and close with caveat (effusion is classifier-detectable, Exp-09 PASS;
+      median blunts at w≥4), (b) carry to plan 07-ldm-enhance as a rendering target, or (c) revise the
+      acceptance criterion. Plan 06 stays open pending this call.
+  - **Verify:** overlays visually show costophrenic blunting in generated effusion samples (parts a/b already confirmed above via the health-check panels). Effusion-only blunt-rate: 32% @w=1 → 66% @w=7 (never ≥80%); open pending the accept/carry/revise decision above.
 
 ## Recommended skill
 — custom; same pattern as existing `plans/rebalanced-cardio-retrain/`. Monitor via W&B `exp_vae_v2_ldm`.

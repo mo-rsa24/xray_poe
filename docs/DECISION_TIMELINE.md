@@ -803,6 +803,36 @@ worry, but the mechanism is subtly different — worth stating precisely.
 
 ---
 
+### [G6e] Does higher guidance rescue the effusion blunt-rate? — Monotonic but NO, plateaus at 66% by w=7 (plan 06 still open)  → see [cfg-guidance], [ctr]
+
+- **Question.** [G6d] left open whether the 32% blunt-rate at w=1.0 was just weak guidance or a real
+  rendering shortfall. Does raising the CFG guidance weight lift the effusion-only blunt-rate to the
+  ≥80% mark?
+- **What we ran.** A controlled CFG sweep on v4-60k: `w ∈ {1, 2, 4, 7}`, effusion-only, n=200 each,
+  same seed (42) so only guidance varies. Same instrument as [G6d]
+  (`score_decoded_array → _row_from_score`; blunted = CP > 80°). Output →
+  `results/vae_v2/ldm_sanity/v4_60k_wsweep/` (`wsweep_summary.csv` + per-w most-blunted panels).
+  Repro: the sweep driver reuses `generate_disease` + the same scorer at four w values.
+- **What it said.** A clean, monotonic dose-response:
+  `w=1 → 32.0%, median CP 70.5°` · `w=2 → 44.5%, 77.0°` · `w=4 → 57.8%, 84.0°` · `w=7 → 66.3%, 94.0°`.
+  Guidance genuinely drives effusion blunting: both the blunt-rate and the median CP angle rise at
+  every step, and the **median film crosses the 80° blunting threshold by w=4 (84°)**. The most-blunted
+  panels show real basal effusion morphology (dense lower-zone opacity obscuring the costophrenic angle),
+  anatomically coherent even at w=7 — not CFG over-saturation artifact. **But the ≥80%-of-samples bar is
+  not reached at any tested guidance (max 66.3% at w=7).**
+- **What we decided.** The 32% at w=1.0 was partly a low-guidance measurement effect (real,
+  guidance-responsive effusion), but not merely that — the geometric ≥80% blunt-rate bar is unmet even
+  at aggressive w=7. Still NOT forcing a pass; plan 06 stays ⚠️ open. This is now a scoped decision for
+  the human: (a) accept a known partial-geometric-blunting limitation and close plan 06 with that caveat
+  (effusion is classifier-detectable — Exp-09 0.905→0.960 PASS — and the median film blunts at w≥4);
+  (b) carry effusion blunting to plan 07-ldm-enhance as a rendering target alongside the cardio
+  small-hearts finding; or (c) revise the acceptance criterion (≥80% at w=1.0 vs median-blunts-at-
+  deployment-guidance).
+- **Fired next.** Await the human's decision on (a)/(b)/(c). No further guidance escalation (w>7 risks
+  realism loss for diminishing geometric return).
+
+---
+
 ## How this log is maintained (supersession, not deletion)
 
 A decision log is only useful if it's honest about the paths that turned out wrong — the
