@@ -132,7 +132,23 @@ hypothesis first; escalate to the VAE re-fine-tune ONLY if the 5k grid is noisy/
       and the Exp-03 co-presence run reads CP corner-blunting per composed film (`exp03_results.csv`,
       `cp_max_angle` column). So DoD-6's "blunted effusion corners" is supported; only the effusion-only overlay
       artifact is missing.
-  - **Verify:** overlays visually show costophrenic blunting in generated effusion samples (parts a/b already confirmed above via the health-check panels).
+    - **STATUS 2026-07-08 (RAN on mscluster110 Blackwell — real number, GATE NOT CLEARED, plan stays open):**
+      `python scripts/effusion_blunt_check.py --n 200 --w 1.0` → `results/vae_v2/ldm_sanity/v4_60k_final/`
+      (`effusion_blunt_rate.txt` + `effusion_panel.png`). First run reported `valid=0/200, nan%` — a
+      **harness bug** (not the model): the driver read `effusion_present`/`cp_max_angle` straight off
+      `score_decoded_array`, which returns only the geometry dict; those keys come from `_row_from_score`.
+      Fixed the driver to the canonical two-step (invocation-level, scoring math untouched); re-ran →
+      `valid=200/200`. **Result: blunt-rate 32.0% (< 80% mark → FAIL), median CP max-angle 70.5°.**
+      **Diagnosis (instrument is sound, generation is the question):** on the same scorer, exp03's 2000
+      films separate cleanly — 1648 non-effusion at median CP 61°, 352 blunted at median 92° (min 81°,
+      just above the 80° cutoff) — so the 80° threshold partitions correctly. The effusion-only films at
+      w=1.0 sit at median 70.5°, a real shift up from the 61° normal baseline but mostly short of 80°.
+      Points to effusion **rendering strength at low guidance (w=1.0)**, not a broken corner-angle read,
+      and is consistent with Exp-09's strong classifier PASS. **Per the plan-06 rule, NOT forced to a pass.**
+      Next: diagnostic CFG-weight sweep (w=1,2,4,7; the smoke test used w=4.0) to separate "weak at low
+      guidance" from "genuine rendering shortfall", and decide whether the pass-mark should be judged at
+      w=1.0 at all. See timeline gate [G6d]. **This task stays `- [ ]` open until that resolves.**
+  - **Verify:** overlays visually show costophrenic blunting in generated effusion samples (parts a/b already confirmed above via the health-check panels). Effusion-only blunt-rate at w=1.0 = 32% (FAIL) — open pending the CFG-sweep diagnosis.
 
 ## Recommended skill
 — custom; same pattern as existing `plans/rebalanced-cardio-retrain/`. Monitor via W&B `exp_vae_v2_ldm`.

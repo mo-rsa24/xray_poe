@@ -772,6 +772,37 @@ worry, but the mechanism is subtly different — worth stating precisely.
 
 ---
 
+### [G6d] Does v4-60k render blunted effusion corners on its own? — NOT YET at w=1.0 (plan 06 stays open)  → see [ctr], [pspnet], [cfg-guidance]
+
+- **Question.** Plan 06's last open sanity: do generated effusion-only films from the winning
+  v4-60k LDM (`4vg2h5i4`) show a blunted costophrenic angle in ≥80% of samples? The cardio half
+  of the sanity was confirmed 2026-07-03; only the effusion-only corner-blunting artifact remained,
+  and it had been GPU-blocked on hippo.
+- **What we ran.** `scripts/effusion_blunt_check.py --n 200 --w 1.0` on the mscluster110 Blackwell
+  GPU (RTX PRO 6000, sm_120) — generate 200 effusion-only films, score each with
+  `metrics.eval_checkpoint.score_decoded_array → _row_from_score` (costophrenic max-angle; blunted
+  = CP > 80°). Output → `results/vae_v2/ldm_sanity/v4_60k_final/effusion_blunt_rate.txt` +
+  `effusion_panel.png`. The first run reported `valid=0/200, nan%` — a **harness bug**: the driver
+  read `effusion_present` / `cp_max_angle` straight off `score_decoded_array`, which returns only the
+  geometry dict; those keys come from `_row_from_score`. Fixed the driver to the canonical two-step
+  (invocation-level; the scoring math was not touched — Guardrail 3) and re-ran → `valid=200/200`.
+- **What it said.** blunt-rate **32.0%** (< 80% mark → **FAIL**), median CP max-angle **70.5°**,
+  200/200 films scored. The instrument is sound, not the cause: on the same scorer, exp03's 2000
+  films separate cleanly — 1648 non-effusion at median CP **61°**, 352 blunted at median **92°**
+  (min 81°, just above the 80° cutoff, max 195°) — so the 80° threshold partitions correctly. The
+  effusion-only films at w=1.0 sit at median 70.5°, a real shift up from the 61° normal baseline but
+  mostly short of 80°. Repro: `python scripts/effusion_blunt_check.py --n 200 --w 1.0` (seed 42).
+- **What we decided.** Do NOT force a pass and do NOT close plan 06. Recorded 32% as-is. The diagnosis
+  points to effusion **rendering strength at low guidance (w=1.0)**, not an instrument failure:
+  conditioning shifts the corner but weakly. Consistent with the strong classifier evidence (Exp-09 v4
+  effusion synth sensitivity 0.905→0.960 PASS, [G6c] family) — the disease is present, just not
+  geometrically pronounced at w=1.0. Plan 06 stays ⚠️ open; DoD item 7 stays open.
+- **Fired next.** A diagnostic CFG-weight sweep (w = 1, 2, 4, 7 at n=200; the plan-06 smoke test used
+  w=4.0) to separate "weak at low guidance" from "genuine rendering shortfall", and a decision on
+  whether the plan-06 pass-mark should be evaluated at w=1.0 at all. No pass claimed until that resolves.
+
+---
+
 ## How this log is maintained (supersession, not deletion)
 
 A decision log is only useful if it's honest about the paths that turned out wrong — the
