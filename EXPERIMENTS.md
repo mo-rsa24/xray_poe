@@ -296,3 +296,90 @@ Run these in order. They exercise the entire study in a day, with no VAE and no 
 
 - **The control pair is unverified.** Cardiomegaly + fracture is a plausible independent pair, but experiment 1 must confirm it's actually ≈ 0 in *your* data. If nothing is near-zero, the controlled comparison weakens — surface it, don't paper over it.
 - **The interaction feature for the figure** — "heart size and fluid rise together with severity" is the predicted coupling, but you still need an extractor that measures it reliably on generated images (validated in the experiment 5 gate).
+
+---
+
+# 🛠 Fix-and-recheck plan · 2026-06-24
+
+This section was added after running experiments 5 and 6. It does not re-open the diagnosis below — it just lays out what to fix, what to re-measure, and how to decide.
+
+**A few words used a lot, in plain terms:**
+- **The detector** — the small classifier that looks at an X-ray and says which disease is present.
+- **Both-disease X-ray** — a real chest X-ray that has *both* a big heart and chest fluid.
+- **Heart-width ratio** — how wide the heart is compared to the chest. A geometric measurement of the picture, so it can't be fooled the way the detector can.
+- **Guidance strength** — how hard we push the model toward a disease while it draws. Higher = pushed harder.
+- **The two claims this protects** — **N1**: composed X-rays show both diseases as often as real ones do. **N2**: composing beats just pasting two X-rays on top of each other.
+
+## What went wrong (settled — do not re-investigate)
+
+Two separate problems. They are different and must not be merged.
+
+1. **The detector can't see both diseases at once.** It was only ever trained on X-rays with *one* disease (or none) — never on X-rays with both. So it learned to pick one answer, not two. On our composed X-rays it almost never reports both. But here's the giveaway: even on *real* both-disease X-rays it only reports both about 1 in 10 times. That ceiling is the detector's fault, not the generator's — **any** detector trained this way would do the same. This problem has nothing to do with which disease pair we pick.
+
+2. **The model draws weak hearts.** When asked for a big heart, the heart it draws barely scores higher than a normal one — far below a real enlarged heart. This one *is* specific to the heart: hearts are a whole-chest shape and are hard to draw, and it shows up whether or not fluid is also requested.
+
+> ## 🔒 The one thing we must not break (claim N2)
+>
+> Our headline result is "composing beats pasting two X-rays on top of each other." Pasting only looks bad when one disease changes the **whole chest shape** and the other sits in **one region**. A big heart is the only common whole-chest finding. So **big heart + chest fluid** is the pair the whole paper rests on — pasting them gives an obvious double-exposure ghost, and it's the classic heart-failure picture (1063 real examples). If we swap the big heart for another *region* disease (e.g. patchy opacities), pasting works almost as well and our advantage disappears. So the pair is not a free choice. Replacing the big heart is a last resort, never called a "fix," and we never swap to a pair where the two diseases sit apart and don't interact.
+
+**Order — all three are cheap, and all run before we decide anything about the pair:** E1 → E2 → E3 → decide.
+
+---
+
+## EXP-E1: Retrain the detector so it can report both diseases
+- claim_id: `local:N1`
+- scope: Independent of which pair we use — needed either way. Until this is fixed, every "both diseases present" number (real and composed) is unreliable.
+- independent_var: what the detector is trained on — add a group of real both-disease X-rays so it learns that "both at once" is allowed.
+- lever: retrain the detector with that both-disease group included. (Build step: the folder of both-disease images doesn't exist yet — only the one-disease folders do. Make it from the real both-disease list `data/nih/partition_testboth.parquet`. See `plans/02-pre-evaluation/plans/03-classifier-finetune.md`.)
+- dependent_var: how often the fixed detector reports both diseases on *real* both-disease X-rays.
+- metric: that "both reported" rate on real X-rays. If the old low ceiling was the training's fault, a detector that has seen both-disease X-rays should clear it easily. If it stays stuck low even now, then counting "both present" is simply the wrong headline measure.
+- sample_size: all real both-disease X-rays (report how many; about 1000), plus about 1000 composed ones for the re-check. Report the rate with a confidence interval.
+- falsify_condition: **fixed (good)** — the rate on real X-rays rises above roughly 15 in 100 → the measure is now fair, go re-check the composed X-rays against it. **Not fixed** — stays at about 10 in 100 or below → counting "both present" is the wrong headline; switch N1 to a different measure. **Unclear** — lands between (about 10–15 in 100) → add more images, re-check calibration, run again; don't spin it.
+- figures: bar chart of the "both reported" rate on real X-rays, old detector vs fixed detector, with confidence bars. (Anti-figure: the fixed detector still stuck at the old low line — that would mean the measure itself is the problem.)
+- compute: hippo, one GPU. Retraining is short; reading the rate is just inference. Save to `$HOME/PhD/Paper3/ckpts` after a disk-space check.
+- status: ⚠️ pending
+
+## EXP-E2: Measure the composed heart by its shape, not the detector
+- claim_id: `local:N1` (also de-risks the N2 pair)
+- scope: Specific to the heart. Asks a simple question: are the composed hearts actually drawn wide, even if the detector missed them?
+- independent_var: how we measure the heart — the detector vs. the heart-width ratio measured directly from the picture (using the HybridGNet outline tool in the inspection harness; `figures/visual_inspection/`, `plans/02-pre-evaluation/plans/04-visual-inspection.md`).
+- lever: outline the heart and lungs, compute the heart-width ratio from geometry. This can't be fooled by the detector's one-answer habit.
+- dependent_var: heart-width ratio of composed hearts vs real enlarged hearts vs normal hearts.
+- metric: heart-width ratio. It cleanly splits the two possibilities: if composed hearts measure wide (close to real enlarged hearts), the **model was fine and the detector was the problem**. If they measure normal-width, the **model really can't draw a big heart**.
+- sample_size: about 1000 composed hearts, plus real enlarged and real normal hearts to compare against. Report the typical value and spread for each group.
+- falsify_condition: **was measurement** — composed hearts measure clearly wider than normal, most of the way toward real enlarged hearts. **model really fails** — composed hearts measure no wider than normal. **Unclear** — somewhere in between → more images and cross-check with E3.
+- figures: the three groups (normal · composed · real enlarged) as overlaid distributions; composed landing on real-enlarged means it was a measurement problem. (Anti-figure: composed landing on normal — proof the model floors the heart.)
+- compute: hippo, inference only, cheap. Reuses the existing inspection harness. No training.
+- status: ⚠️ pending
+
+## EXP-E3: Try pushing the heart harder
+- claim_id: `local:N1`
+- scope: Specific to the heart. We've only ever drawn it at the default push. A whole-chest shape may simply need a harder push than a small fluid region does.
+- independent_var: guidance strength on the heart — try a few settings from the default up to much stronger (default, then progressively harder, five settings in all).
+- lever: turn up the guidance strength on the heart while drawing. No retraining needed — the model already supports this.
+- dependent_var: the composed heart-width ratio (measured the E2 way, not the detector) at each push setting.
+- metric: heart-width ratio vs push strength. If a harder push is the answer, the heart should get wider as we push harder, up toward real enlarged hearts. If the width doesn't move no matter how hard we push, pushing isn't the answer.
+- sample_size: about 500 composed hearts at each of the five settings. Also read the fluid at each setting, so we catch it if a harder heart push starts ruining the fluid or realism.
+- falsify_condition: **pushing works** — the heart widens as we push harder and reaches the real-enlarged range at some setting. **pushing doesn't work** — width stays flat across all settings → the cause is something else. **Unclear** — width rises but stalls short, or a harder push wrecks the fluid/realism → report the trade-off, don't force a setting.
+- figures: a curve of heart-width vs push strength with the real-enlarged range shaded, fluid level drawn alongside to show the cost. (Anti-figure: a flat line — pushing harder changes nothing.)
+- compute: hippo, drawing 500 images at each of five settings — the main GPU cost here. Run the settings one after another (no job scheduler on hippo). Save under `$HOME/PhD/Paper3` after a disk-space check.
+- status: ⚠️ pending
+
+---
+
+## 🔒 The decision, decided now (before we look at results)
+
+Read this only after E1, E2, and E3 are all done. E1 decides whether our "both present" measure can be trusted at all. E2 and E3 together decide whether the model can draw a big heart.
+
+| If… | Then | Keeps safe |
+|---|---|---|
+| **Keep the pair (the win)** — E2 shows the heart *is* drawn wide, **or** E3 shows a harder push widens it | **Keep big heart + chest fluid.** The "failure" was bad measurement and/or too gentle a push, not the model. Lock in the fixed detector and the working push, and re-run experiments 5 and 6. | Both N1 and N2 — nothing swapped |
+| **Swap the heart (last resort only)** — **all three** still say the model genuinely can't draw a big heart | Replace **only the heart**, keep the **fluid**, and pick a replacement that still **physically interacts** with the fluid so pasting still fails: collapsed-lung + fluid (3275 examples) or pneumonia/consolidation + fluid (1287). **Never** a pair where the two sit apart and don't interact — that quietly kills the paper. | N2 — pasting must still fail |
+| **Change the measure (separate, depends only on E1)** — E1 says the detector still can't report both even after retraining | Drop "count how often both are present" as the headline. Use the joint heart-size-and-fluid comparison from experiment 6 instead. This is independent of the heart question. | N1 — keeps a measure we can trust |
+
+**Either way we keep the pair:** re-measure the "fluid works, heart doesn't" comparison with the fixed detector (E1) and the shape measurement (E2). Fluid's apparent success is partly just the old detector being freed to report it, so it has to be re-checked before we claim it.
+
+**For the write-up (decided now):**
+- Always report "both present" *relative to what real X-rays score*, never as a bare number.
+- Say plainly in the methods that the first detector was trained on one-disease X-rays only, that this is why the first numbers were unreliable, and that E1 fixed it.
+- If we swap the heart, say plainly it was dropped because the *model* couldn't draw it (E1+E2+E3), and that the replacement still keeps one whole-chest disease and one region disease so pasting still fails.

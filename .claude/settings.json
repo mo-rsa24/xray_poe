@@ -233,7 +233,18 @@
       "Bash(python3 -c \"from PIL import Image; import glob; p=sorted\\(glob.glob\\('data/nih/images/*.png'\\)\\)[:1]; print\\(p\\); print\\(Image.open\\(p[0]\\).size, Image.open\\(p[0]\\).mode\\) if p else print\\('none'\\)\")",
       "Bash(python3 -c \"import ast; ast.parse\\(open\\('scripts/rfid_gate.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
       "Bash(python3 -c \"import scripts.rfid_gate as m; print\\('import OK; funcs:', [f for f in dir\\(m\\) if not f.startswith\\('__'\\)][:8]\\)\")",
-      "Bash(python3 scripts/rfid_gate.py --help)"
+      "Bash(python3 scripts/rfid_gate.py --help)",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('scripts/naive_overlay.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
+      "Bash(python3 /tmp/claude-1000/-home-molef-PhD-Paper3/a638c484-6d7e-47e1-b8be-cc5ed3443ad5/scratchpad/analyze.py)",
+      "Bash(python3 /tmp/claude-1000/-home-molef-PhD-Paper3/a638c484-6d7e-47e1-b8be-cc5ed3443ad5/scratchpad/a2.py)",
+      "Bash(python3 /tmp/claude-1000/-home-molef-PhD-Paper3/a638c484-6d7e-47e1-b8be-cc5ed3443ad5/scratchpad/a3.py)",
+      "Bash(printenv)",
+      "Bash(python3 -c \"import wandb; print\\('wandb', wandb.__version__\\)\")",
+      "Bash(rm -f \"/tmp/claude-1000/-home-molef-PhD-Paper3/a638c484-6d7e-47e1-b8be-cc5ed3443ad5/scratchpad\"/*.png 2>/dev/null; echo \"cleaned\")",
+      "Bash(grep -iA6 -E 'host \\(hippo|candle\\)' ~/.ssh/config)",
+      "Bash(timeout 60 ssh -o ConnectTimeout=20 hippo 'echo \"host=$\\(hostname\\) user=$\\(whoami\\) home=$HOME\"; echo \"--- repo ---\"; if [ -d ~/PhD/Paper3/.git ]; then cd ~/PhD/Paper3 && git log --oneline -1 && echo \"status:\" && git status --short | head -30; else echo \"NO REPO at ~/PhD/Paper3\"; fi; echo \"--- heavy dirs ---\"; du -sh ~/PhD/Paper3/data ~/PhD/Paper3/ckpts ~/PhD/Paper3/outputs 2>/dev/null; echo \"--- ~/.claude ---\"; ls ~/.claude 2>/dev/null | head; echo \"skills:\"; ls ~/.claude/skills 2>/dev/null | wc -l; echo \"projects:\"; ls ~/.claude/projects 2>/dev/null')",
+      "Bash(rsync -an --stats --exclude=.git/ --exclude=data/ --exclude=ckpts/ --exclude=outputs/ --exclude=results/ --exclude=illuminate-output/ --exclude=configs/ldm_full.yaml --exclude=metrics/fid.py --exclude=__pycache__/ --exclude=*.pyc --exclude=.venv/ --exclude=venv/ --exclude=.ipynb_checkpoints/ ./ hippo:PhD/Paper3/)",
+      "Bash(rsync -an '--out-format=%l %n' --exclude=.git/ --exclude=data/ --exclude=ckpts/ --exclude=outputs/ --exclude=results/ --exclude=illuminate-output/ --exclude=configs/ldm_full.yaml --exclude=metrics/fid.py --exclude=__pycache__/ --exclude=*.pyc --exclude=.venv/ --exclude=venv/ ./ hippo:PhD/Paper3/)"
     ],
     "additionalDirectories": [
       "/home/molef/.claude/skills",
@@ -242,7 +253,8 @@
       "/tmp",
       "/home/molef/PhD/Paper3/paper/wacv-2027",
       "/home/molef/PhD/Paper3/.vscode",
-      "/mnt/c/Users/molef/.ssh"
+      "/mnt/c/Users/molef/.ssh",
+      "/tmp/claude-1000/-home-molef-PhD-Paper3/a638c484-6d7e-47e1-b8be-cc5ed3443ad5/scratchpad"
     ]
   }
 }

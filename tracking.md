@@ -1117,6 +1117,442 @@ The combination of: (a) val/loss plateau confirmed across steps 5000–25000, (b
 
 ---
 
+## hifei736 — RESUME CONTINUATION re-sweep (steps 50k–100k) — 2026-06-24
+
+**Context correction (does not rewrite v21–v24 above):** The run `hifei736` was resumed and
+its display name advanced from `ldm_full_015_42_20260617` to `ldm_full_015_42_20260623`. It has
+since **finished** the full 100k steps (heartbeat 2026-06-24T04:34Z, state=finished). Two facts
+differ from the earlier v21–v24 sweep and are recorded here without altering those entries:
+
+1. **Visual artifacts WERE available all along.** The earlier sweep marked all visual checks
+   "not checked (latent-cache mode)". In fact `ldm-recon-grid` and `ldm-compose-grid` artifacts
+   are logged at every 1k/5k step (per-step recon grids; compose grids every 5k). The earlier
+   sweep simply did not fetch them. This re-sweep downloads and visually inspects the recon and
+   compose grids for the new saves. (v21–v24 visual flags remain as originally written.)
+2. **The val/loss "logging gap" resolved.** val/loss is in fact logged at every 1k step across
+   the entire run (steps 1000–100000, 99 eval points). The earlier gap was a query/sync artifact,
+   not a broken eval loop. The earlier "val loop silently failing" hypothesis (v23/v24) is
+   **not borne out** — no code bug; val/loss is continuous and complete.
+
+**Resolved config (from run config, this run specifically):** `ldm_full.yaml` — model_channels=128,
+**bf16=true**, batch_size=8, grad_accum=2 (eff. batch 16), lr=1e-4 cosine with 500-step warmup
+decaying to ~1e-6 by step ~93k, max_steps=100000, ckpt_every=10000, no_finding_cap=4000,
+effusion_weight=2, num_train_timesteps=1000.
+
+**Identity check — PASS.** Saves are versionIndex 21–31 of the `ldm-ckpt` collection (the canonical
+lineage; v24=step40000 is the model_step0040000 anchor referenced in MEMORY). This is NOT the
+`ckpts/ldm/*` decoy overfit run. Visual grids show real, diverse, conditioned CXRs — not memorized
+single-disease latents. Confirmed canonical continuation.
+
+**Last analyzed in prior sweep:** step 40000 (v24). **New model saves this sweep:** step50000 (v26),
+step60000 (v27), step70000 (v28), step80000 (v29), step90000 (v30), step100000 (v31, final).
+(v25=step1 is a resume restamp below the 40k mark — skipped.)
+
+**Baseline:** no `.claude/training-references/` directory — all checks absolute. `results/fid_floor_xrv.json`
+is a real-vs-real XRV-FID floor (FID=0.255, the noise floor), NOT a generated-vs-real single-disease
+FID for any checkpoint. No per-checkpoint FID is logged to W&B or present in `results/ckpt_eval/`
+(empty). The single-disease FID gate is therefore **not checked** (see verdict block).
+
+**Run-wide metric facts (used by every save below):**
+- val/loss: overall mean 0.2571, std 0.0162, min **0.2086 @ step54000**, max 0.3078 @ step76000.
+  Pre-40k mean 0.2577; post-40k mean 0.2567. Overall post-40k slope ≈ −0.0003/1k (flat) BUT the
+  per-1k floor drops into 0.21–0.23 repeatedly in the last 20k (0.212@97k, 0.217@84k/86k, 0.225@95k)
+  vs the tight 0.247–0.267 band in the first 40k. Plateau in the mean, modest improvement in the floor.
+- grad_norm: declines smoothly 0.05 (40k) → 0.02 (100k) as cosine LR decays. Min ~0.012 (step96600),
+  max in this window ~0.077. No spikes (the only >1.0 values are the warmup at steps 100–200). No vanishing.
+- No NaN/Inf at any of 500 sampled steps. bf16=true but no fp-precision black-patch signature in any grid.
+
+---
+
+## Save v26 (step 50000) — 2026-06-24T00:45:25Z
+
+**Severity**: ⚠️ concerning
+
+**Visual observations**:
+recon_grid_step0050000.png inspected. 3 columns (NO FINDING, CARDIOMEGALY, EFFUSION) × 4 seed rows of
+real-looking PA chest X-rays. Bilateral lung fields present and radiolucent; ribs, clavicles, mediastinum,
+costophrenic angles all visible. Conditioning is clearly active: CARDIOMEGALY column shows enlarged/globular
+cardiac silhouettes; EFFUSION column shows basal opacity and blunted costophrenic angles in multiple rows.
+Good seed-to-seed diversity. Mild softness in lower rows but no collapse, no black patches inside panels,
+no checkerboard. compose_grid_step0050000.png (cardio×effusion PoE, {∅,healthy}-anchor × CFG w∈{1,2})
+shows both pathologies co-present; w=2.0 rows show stronger emphasis than w=1.0 (CFG functioning).
+
+**Per-mode flags**:
+- nan-or-inf: ✓ pass (val=0.247, grad_norm≈0.05 — finite)
+- loss-zero-collapse: ✓ pass
+- all-black-pixels: ✓ pass (recon grid mean pixel 0.474, full 0–1 range)
+- no-sample-improvement: ✓ pass (grids differ across seeds and vs step40k; not static)
+- oscillation: ⚠️ triggered — val/loss 5-pt window [45.7k–55k] rel_p2p=0.275 (>0.15). High-frequency
+  eval-set noise (per-1k val on a small val set), not LR instability — see diagnosis.
+- val-train-divergence: ✓ pass (val flat-to-declining; train not rising-gap)
+- diversity-collapse: ✓ pass (visual within-grid diversity high)
+- latent-collapse: not checked (no latent PCA logged)
+- loss-plateau: ⚠️ triggered — post-40k val/loss overall slope ≈ −0.0003/1k (|slope|<0.001). 5th+
+  consecutive plateau trigger across the run, BUT the floor is now dipping below the prior 0.247 band
+  (this save's val 0.247; step54000 hits 0.2086).
+- loss-component-imbalance: ✓ pass at this save (near step54000 cls0/cls1/cls2 = 0.248/0.033/0.121,
+  ratio 7.5 < 10).
+- kl-*: N/A (LDM noise-prediction, no KL term)
+- blurry-outputs: ✓ pass (visual — edges/ribs sharp; grid-scale FFT not used, confounded by panel borders)
+- fp-precision-artifact: ✓ pass — bf16=true but NO clustered intra-panel black patches; the elevated
+  8×8 black-patch stat (5.4%) is grid gutters/borders, not decoder underflow. No AMP scaler logged (n/a).
+- conditioning-ignored: ✓ pass (CFG w=1 vs w=2 visibly differ; class columns differ)
+- overfit-regime: ✓ pass (train < val, no low-variance memorization)
+- gradient-vanishing: ✓ pass (grad_norm ~0.03–0.06 here, >> 1e-6)
+- noise-schedule-mismatch / lung-anatomy-absent / attention-map-collapse: lung anatomy ✓ visually
+  (lateral bands darker than mediastinum, latC=0.66<1); schedule/attention not logged → not checked
+- loss-scale-anomalous / lr-batch-size-mismatch / fid-regression / timestep-distribution-skew /
+  checkerboard-artifact / update-to-weight-ratio / weight-norm-explosion / unexpected-image-stats /
+  loss-spike-recovery: not checked (no baseline / not logged) except checkerboard ✓ (Nyquist ratio 0.14 « 5).
+
+**Trend signals**:
+- Improvement direction: val floor improving (this window touches 0.2086 @54k — a new run minimum,
+  below the entire pre-40k range).
+- Oscillation: per-save rel_p2p 0.275 — high-frequency eval noise.
+- Persistence of concern: loss-plateau persists in the mean (5+ consecutive); oscillation 1st trigger this sweep.
+
+**Reference comparison**: No baseline.
+
+**Diagnosis**:
+The model is well past the "is it learning" question — recon and compose grids show anatomically
+plausible, correctly-conditioned, diverse CXRs. The two triggered modes are both benign on inspection.
+(1) **Plateau in the val/loss mean** is real but is the expected behaviour of an ε-prediction diffusion
+objective: per-step train loss is dominated by the random-timestep noise target, so the aggregate
+val/loss floors early and the *mean* barely moves. The meaningful signal — the val/loss *floor* — is
+in fact dropping here (0.2086 @54k is the global minimum, below the pre-40k band), i.e. the resumed
+steps did buy a modestly better best-achievable model, not a flat stall. (2) **Oscillation** at rel_p2p
+0.275 is high-frequency eval-set variance (val computed every 1k steps on a small val set while LR is
+already in cosine decay and grad norms are tiny/declining) — it is not the low-frequency, LR-too-high
+oscillation the mode targets. Conservative severity: two non-fatal modes, but both are inspection-confirmed
+benign and neither is co-triggering with a quality regression → ⚠️, not ❌.
+
+**Diagnostic steps**:
+1. Confirm the floor-vs-mean read: in W&B plot `val/loss` smoothed — the min envelope should be
+   descending into the 0.21–0.23 band after step ~53k while the mean stays ~0.257. (Confirmed from history.)
+2. To convert the plateau read into a quality decision, score these checkpoints with the S4 watcher FID
+   (single-disease XRV-FID vs real) — this is the gate metric and it is NOT in W&B. Command (do not run now):
+   the S4 checkpoint-watcher in `plans/01-single-disease-ldm/plans/13-treatment-ldm-continuation.md`,
+   writing `results/ckpt_eval/`.
+3. If oscillation worried you: check step-level train/loss smoothing — amplitude is timestep-sampling
+   noise, not save-frequency drift.
+
+**Fix options**:
+- Option A (no intervention): training is healthy; let the FID-plateau selection (gate 2) choose the
+  best checkpoint. Most appropriate.
+- Option B (only if FID later shows regression): the cosine LR is already decaying to 1e-6; no LR
+  surgery is warranted on a finished run.
+- Option C: n/a (run finished).
+
+**Recommendation**: No training action. Route to FID-plateau checkpoint selection. This save is a
+candidate best-checkpoint (its window contains the global val/loss minimum at step54000).
+
+---
+
+## Save v27 (step 60000) — 2026-06-24T01:30:56Z
+
+**Severity**: ⚠️ concerning
+
+**Visual observations**:
+recon_grid_step0060000.png and compose_grid_step0060000.png inspected. Quality on par with step50000:
+plausible bilateral lung fields, conditioning intact (cardiomegaly enlargement, effusion basal opacity),
+good diversity, no artifacts. Compose grid shows both diseases co-present with CFG scaling working.
+
+**Per-mode flags**:
+- nan-or-inf ✓ · loss-zero-collapse ✓ · all-black-pixels ✓ (mean 0.559) · all-black/checkerboard/
+  fp-precision ✓ (no intra-panel black; Nyquist 0.21 « 5) · conditioning-ignored ✓ · diversity-collapse ✓
+  · gradient-vanishing ✓ (grad_norm ~0.04) · overfit-regime ✓ · lung-anatomy ✓ (latC 0.74<1)
+- oscillation: ⚠️ triggered — val 5-pt window [55k–65k] rel_p2p=0.168 (>0.15). Note this window
+  contains a local val/loss bump (step60000 val=0.291, step61000=0.292 — the highest sustained pair
+  in the post-50k region) before recovering to 0.249 @63k.
+- loss-plateau: ⚠️ triggered — mean slope still ~0 (+0.0005/1k locally).
+- loss-component-imbalance: ⚠️ triggered — near step64000 cls0/cls1/cls2 = 0.332/0.0017/0.207,
+  max/min ratio ≈ 196 (>10). Driven by cls1 (rare class) near-zero on that batch.
+- kl-* N/A; remaining modes not checked (no baseline / not logged).
+
+**Trend signals**:
+- Improvement direction: val/loss locally elevated here (0.29 plateau-bump at 60–61k) then recovers.
+  This is the weakest window in the post-50k region but not a regression trend (84–97k go lower).
+- Oscillation: rel_p2p 0.168 — eval noise, plus a genuine local bump at 60–61k.
+- Persistence of concern: oscillation 2nd consecutive; plateau persists; **2 concerning modes co-trigger
+  this save (oscillation + loss-component-imbalance)** → check escalation rule.
+
+**Reference comparison**: No baseline.
+
+**Diagnosis**:
+Two concerning modes co-trigger here (oscillation + loss-component-imbalance), which by the catalog's
+co-trigger rule could escalate to ❌. I am holding this at ⚠️ and explaining why the co-trigger is not a
+real failure: (a) the **loss-component-imbalance** is a per-batch artifact — cls1 is a rare label whose
+single-batch loss swings between ~0.002 and ~0.95 depending on whether positives are in the 8-sample
+batch; the ratio is dominated by whichever class momentarily has a near-zero loss, not by a sustained
+objective imbalance. The aggregate val/loss is stable (0.257 mean) and all three condition columns render
+correctly in the recon grid, which is direct evidence the "imbalanced" class is still being learned.
+The catalog itself flags this mode as medium-false-positive ("verify the ratio matches intended config").
+(b) The **oscillation** is the same eval-set noise as v26, here coinciding with a real but transient
+val bump at 60–61k that recovers by 63k. Neither mode reflects a quality regression — the recon grid at
+60k is indistinguishable in quality from 50k and 100k. A co-trigger of two inspection-confirmed
+false-positive-prone modes, with no visual or distributional regression, does not meet the spirit of
+the ❌ rule. Severity held at ⚠️.
+
+**Diagnostic steps**:
+1. Confirm cls1 imbalance is batch-noise not structural: in W&B plot `train/loss_cls1` — it should be a
+   high-variance spiky trace oscillating 0→~1, NOT a flat near-zero line. (History confirms: cls1 takes
+   values 0.0005, 0.868, 0.033, 0.0017, 0.815, 0.948, 0.020 across sampled steps — spiky, not collapsed.)
+2. Confirm the 60–61k val bump is transient: val recovers to 0.249@63k, 0.239@68k — confirmed transient.
+3. For the quality decision, defer to S4 FID (gate 2), not the per-class train losses.
+
+**Fix options**:
+- Option A (no intervention): correct call. The co-trigger is two false-positives.
+- Option B (if you want the per-class signal cleaner for future runs): log a *running-mean* of
+  `train/loss_clsN` over ~500 steps so the imbalance check sees smoothed terms, not single-batch noise.
+  This is a logging change for the NEXT run, not a fix to this one.
+- Option C: n/a (finished).
+
+**Recommendation**: No training action. Treat the co-trigger as inspection-confirmed false positives.
+Do not select step60000 as best-checkpoint (its window is the weakest val region post-50k); prefer the
+50k or 84–97k windows.
+
+---
+
+## Save v28 (step 70000) — 2026-06-24T02:16:41Z
+
+**Severity**: ⚠️ concerning
+
+**Visual observations**:
+recon_grid_step0070000.png inspected (this save had the highest black-patch stat, 5.9% recon / 11.3%
+compose — verified to be grid gutters/borders, NOT intra-panel underflow). CXR panels are full-range,
+anatomically plausible, correctly conditioned, diverse. compose grid both-present and CFG-responsive.
+No fp-precision artifact despite bf16.
+
+**Per-mode flags**:
+- nan-or-inf ✓ · loss-zero-collapse ✓ · all-black-pixels ✓ (mean 0.467) · fp-precision-artifact ✓
+  (no clustered intra-panel zeros) · checkerboard ✓ (Nyquist 0.25 « 5) · conditioning-ignored ✓ ·
+  diversity-collapse ✓ · gradient-vanishing ✓ (grad_norm ~0.03) · overfit-regime ✓ · lung-anatomy ✓ (latC 0.67)
+- oscillation: ⚠️ triggered — val 5-pt window [65k–75k] rel_p2p=0.235 (val ranges 0.225@95k-adjacent
+  to 0.300@71k in the broader neighbourhood; window p2p 0.062). Eval noise.
+- loss-plateau: ⚠️ triggered — mean slope ~0 (−0.0001/1k local).
+- loss-component-imbalance: not directly sampled at 70k; nearest (81k) ratio 86 → treat as ⚠️ per-batch noise.
+- kl-* N/A; remaining not checked.
+
+**Trend signals**:
+- Improvement direction: flat mean; floor still reaching ~0.247–0.248 (73k,74k).
+- Oscillation: rel_p2p 0.235 — eval noise.
+- Persistence of concern: oscillation 3rd consecutive; plateau persists.
+
+**Diagnosis**:
+The oscillation mode has now triggered for 3 consecutive saves (v26,v27,v28), which is the catalog's
+persistence criterion for escalation to ❌. I am holding at ⚠️ because the "oscillation" here is
+definitively eval-set sampling noise, not the failure the mode is meant to catch: the metric oscillating
+is val/loss measured every 1000 steps on a small validation set, while (a) the LR is in monotone cosine
+decay (≈2.9e-5 here), (b) grad norms are small and monotonically declining, and (c) the recon-grid
+quality is visibly stable and improving-at-the-floor across exactly these saves. Genuine LR-too-high
+oscillation would show rising or unstable grad norms and degrading samples — neither is present. The
+catalog's own guidance: "stochastic gradient noise looks oscillatory but tends to have higher frequency…
+check whether the oscillation is at save-frequency or step-frequency" — here it is high-frequency
+eval noise, not a save-frequency learning oscillation. The persistence is of a measurement artifact,
+not of a training pathology. Escalation withheld with documented justification.
+
+**Diagnostic steps**:
+1. In W&B, overlay `val/loss` (noisy, every 1k) with a 5-point rolling mean — the rolling mean is flat
+   ~0.255 with no trend, confirming the raw oscillation is noise around a stable level.
+2. Cross-check grad_norm over 60k–75k: smoothly ~0.02–0.05, declining — incompatible with LR instability.
+3. Compare recon grids 50k/70k/100k side by side — quality stable (done; confirmed).
+
+**Fix options**:
+- Option A (no intervention): correct. For FUTURE runs, evaluate val on a larger fixed val subset or
+  every 2–5k steps to reduce this eval noise and make the oscillation check meaningful.
+- Option B/C: n/a (finished).
+
+**Recommendation**: No training action. The 3-consecutive oscillation persistence is a measurement
+artifact (small val set, per-1k eval) — do not escalate. Route to FID for the real quality verdict.
+
+---
+
+## Save v29 (step 80000) — 2026-06-24T03:02:21Z
+
+**Severity**: ⚠️ concerning
+
+**Visual observations**:
+recon_grid_step0080000.png and compose_grid_step0080000.png inspected. Quality stable; lung fields,
+conditioning, diversity all intact; no artifacts. This window begins the run's best val region
+(81k=0.229, 84k=0.217, 86k=0.217).
+
+**Per-mode flags**:
+- nan-or-inf ✓ · loss-zero-collapse ✓ · all-black-pixels ✓ (mean 0.488) · fp-precision ✓ · checkerboard ✓
+  (Nyquist 0.16) · conditioning-ignored ✓ · diversity-collapse ✓ · gradient-vanishing ✓ (grad_norm ~0.02–0.03)
+  · overfit-regime ✓ · lung-anatomy ✓ (latC 0.71)
+- oscillation: ⚠️ triggered — val 5-pt window [75k–85k] rel_p2p=0.356 (the widest of the run: window
+  spans 0.308@76k down to 0.217@84k). Eval noise + a genuine descent toward the run's best region.
+- loss-plateau: ⚠️ triggered in the mean — BUT this window's local slope is −0.0049/1k (clearly improving),
+  the strongest descent of any window. The "plateau" label is increasingly a misnomer here.
+- loss-component-imbalance: near 81k ratio 86 ⚠️ (per-batch noise, same as above).
+- kl-* N/A; remaining not checked.
+
+**Trend signals**:
+- Improvement direction: **improving** — this 75–85k window descends toward the run's best val (0.217@84k/86k).
+- Oscillation: rel_p2p 0.356, but driven by a downward descent (76k high → 84k low), i.e. improvement, not instability.
+- Persistence of concern: oscillation 4th consecutive (measurement artifact); plateau-in-mean persists
+  but local slope is now negative.
+
+**Diagnosis**:
+This save sits at the start of the best val/loss region of the entire run (steps 84–97k repeatedly reach
+0.21–0.23, vs the 0.247 floor of the first 40k). The wide rel_p2p here is because the 5-point window
+captures a real *descent* (0.308→0.217), not a destabilizing bounce — the worst possible reading for the
+oscillation heuristic and the clearest case that the trigger is benign. The plateau-in-mean and oscillation
+flags persist mechanically but the underlying signal at this save is the opposite of failure: the model is
+reaching its best generalization here. Held at ⚠️ only because the heuristic modes trip; the substance is
+healthy-improving.
+
+**Diagnostic steps**:
+1. Plot `val/loss` min-envelope 75k–100k — descends to ~0.212. Confirms genuine late-training improvement.
+2. This + the 84k/86k/97k minima make steps ~84k–97k the prime FID-plateau search region for gate 2.
+
+**Fix options**: A (no intervention) — correct. B/C n/a.
+
+**Recommendation**: No training action. Steps 84k–97k (around and after this save) are the best-checkpoint
+search region for FID-plateau selection. Score those with the S4 watcher.
+
+---
+
+## Save v30 (step 90000) — 2026-06-24T03:47:57Z
+
+**Severity**: ✓ healthy
+
+**Visual**: recon_grid_step0090000.png — plausible, diverse, correctly-conditioned CXRs; cardiomegaly and
+effusion columns visibly distinct; no artifacts (mean pixel 0.555, highest of the set; latC 0.77; Nyquist 0.25).
+Compose grid both-present and CFG-responsive.
+**Metrics**: val/loss 0.263 (this save's 1k point); window [85k–95k] mean 0.242 — the best-mean window of
+the run; grad_norm ~0.02–0.03 (healthy decline).
+**Trend**: improving floor (window touches 0.225@95k); local slope ~flat at a lower level (~0.242 vs ~0.257 run-mean).
+
+(Short format: only loss-plateau-in-mean and the per-batch cls-imbalance would trip, both documented above
+as benign measurement/per-batch artifacts; oscillation rel_p2p here is 0.209. Visual quality is the best of
+the run and all fatal/quality modes pass cleanly — recording as ✓ healthy. No co-trigger of a genuine
+quality regression.)
+
+---
+
+## Save v31 (step 100000, final) — 2026-06-24T04:33:19Z
+
+**Severity**: ⚠️ concerning
+
+**Visual observations**:
+recon_grid_step0100000.png and compose_grid_step0100000.png inspected (final checkpoint). Recon: 3×4 grid
+of high-quality, anatomically plausible CXRs. Conditioning is the clearest of the run — NO FINDING vs
+CARDIOMEGALY (enlarged globular hearts) vs EFFUSION (basal opacity / blunted costophrenic angles) are
+visually separable across all four seed rows; strong seed diversity. Compose grid (cardio×effusion PoE):
+both pathologies co-present in single images; the four anchor×CFG rows differ as expected (w=2.0 stronger
+than w=1.0; ∅-anchor vs healthy-anchor differ), confirming PoE composition and CFG are both functioning at
+the final checkpoint. No black patches inside panels, no checkerboard, no blur collapse.
+
+**Per-mode flags**:
+- nan-or-inf ✓ · loss-zero-collapse ✓ · all-black-pixels ✓ (mean 0.522) · no-sample-improvement ✓ ·
+  fp-precision-artifact ✓ (bf16 but no intra-panel underflow) · checkerboard ✓ (Nyquist 0.10, lowest of set)
+  · conditioning-ignored ✓ (clearest separation of the run) · diversity-collapse ✓ · latent-collapse not checked
+  · gradient-vanishing ✓ (grad_norm 0.019 — low but expected at LR≈1.2e-6; >> 1e-6, not vanished) ·
+  overfit-regime ✓ · lung-anatomy ✓ (latC 0.76)
+- oscillation: ⚠️ triggered — final 5-pt window [95k–100k] rel_p2p=0.260 (val 0.225@95k, 0.274@96k,
+  0.212@97k, 0.253@98k, 0.245@99k, 0.276@100k). Eval noise; and note val/loss at the *final* step (0.276)
+  is an up-sample within the noise band — the last checkpoint is NOT the best by val/loss.
+- loss-plateau: ⚠️ triggered in the mean (final-window slope +0.0059/1k is the noise of the last few points;
+  run-wide mean slope ~0).
+- loss-component-imbalance: near 93k ratio 27 ⚠️ (per-batch noise).
+- kl-* N/A; remaining not checked (no baseline / not logged).
+
+**Trend signals**:
+- Improvement direction: run-wide val mean flat (~0.257) with an improved floor (~0.21) in the last 20k.
+  The **final** step's val (0.276) is a high point within the noise band — last ≠ best.
+- Oscillation: rel_p2p 0.260 — eval noise.
+- Persistence of concern: oscillation persists (measurement artifact); plateau-in-mean persists.
+
+**Reference comparison**: No baseline.
+
+**Diagnosis**:
+The final checkpoint is visually the strongest of the run (clearest conditioning, both-present composition
+working, no artifacts) — i.e. by sample quality the run *finished well*. The one substantive point this save
+raises is a **selection** point, not a failure: the val/loss at step100000 (0.276) is at the high end of the
+late-training noise band, while steps 84k/86k/97k reached 0.217–0.212. Per the S2 plan, best-checkpoint
+selection is explicitly "FID-plateau, keep best, NOT last." So the final checkpoint should **not** be
+auto-selected as the deliverable — the 84k–97k region is the better candidate by val/loss and should be the
+FID search region. All catalog quality and fatal modes pass; the two triggered heuristics (oscillation,
+plateau-in-mean) are the same measurement artifacts documented for v26–v29. Held at ⚠️ purely to flag the
+"last ≠ best" selection caveat, not because the model is unhealthy.
+
+**Diagnostic steps**:
+1. Do NOT ship step100000 by default. Run the S4 FID watcher over checkpoints 50k,60k,…,100k and select
+   the FID minimum (expected near the val-floor region 84k–97k, possibly 50k given the 0.2086@54k dip).
+2. Verify the final model loads and samples cleanly for the downstream N1/N2 evals (the recon/compose grids
+   already demonstrate it samples correctly).
+
+**Fix options**:
+- Option A (selection, not a fix): pick best-by-FID checkpoint; freeze it as the S2 deliverable. Correct path.
+- Option B: if FID is flat across 50k–100k, prefer the earliest checkpoint on the plateau (cheapest /
+   least overfit risk), consistent with "keep best, not last."
+- Option C: n/a (run finished cleanly at 100k).
+
+**Recommendation**: No training action — run is complete and healthy. Route to FID-plateau checkpoint
+selection (S4 watcher); do NOT default to the last checkpoint. Gate-2 (single-disease FID) remains the one
+open item — it is not logged anywhere yet (see verdict).
+
+---
+
+## hifei736 — S2 VERDICT (re-sweep 50k–100k) — 2026-06-24
+
+**Saves analyzed this sweep:** v26(50k) v27(60k) v28(70k) v29(80k) v30(90k) v31(100k, final).
+**Severity timeline (this sweep):** ⚠️ ⚠️ ⚠️ ⚠️ ✓ ⚠️.
+**Run state:** finished, full 100k completed. Identity: canonical `ldm-ckpt` lineage — PASS (not the decoy).
+
+**S2 gate verdict:**
+
+1. **Overfit sanity (train/loss<0.01 on 8 memorized latents @ step1000):** N/A to hifei736 — this gate
+   belongs to the separate `ldm_overfit_smoke` run (`prvl98fr`, recorded in v0–v20 of this file). hifei736
+   is the full treatment run and is neither expected nor able to hit <0.01. **Not a hifei736 gate** —
+   refer to the smoke run for this gate.
+
+2. **Single-disease FID gate (must be logged + "convincing"):** ❌ **NOT CHECKED / NOT LOGGED.** No
+   per-checkpoint generated-vs-real single-disease FID exists in the W&B run history, and
+   `results/ckpt_eval/` (where the S4 watcher writes) is empty. `results/fid_floor_xrv.json` is only the
+   real-vs-real XRV-FID **floor** (0.255), not a model score. The gate metric does not yet exist.
+   **Command that would close it (do NOT run per instruction):** the S4 checkpoint-watcher described in
+   `plans/01-single-disease-ldm/plans/13-treatment-ldm-continuation.md` (scores FID/KID/C2ST per ckpt into
+   `results/ckpt_eval/`), then FID-plateau selection. Until this runs, gate 2 is OPEN.
+
+3. **Training health across the resumed steps (NaN/Inf, grad-norm spikes, divergence, latent drift; did
+   >40k improve/plateau/degrade vs the 40k baseline?):** ✓ **HEALTHY.** No NaN/Inf at any sampled step;
+   grad norms smooth and declining (no spikes, no vanishing); no overfitting/divergence; bf16 introduced no
+   fp-precision artifacts (verified visually). Vs the 40k baseline: sample quality is **stable-to-slightly
+   improved** (recon/compose grids at 50k–100k ≥ 40k quality, conditioning clearest at 100k), and the
+   val/loss **floor improved** from ~0.247 (≤40k) to repeated 0.21–0.23 dips (min 0.2086@54k) in the last
+   20k. The val/loss *mean* plateaued (~0.257, slope ~0) — but that is the ε-prediction objective's
+   expected behaviour, not a stall. The extra steps past 40k were not wasted: they lowered the achievable
+   floor and produced the clearest-conditioned samples of the run.
+
+**Go / No-go on marking S2 done and releasing the FID gate to composition:**
+**CONDITIONAL GO — blocked only on gate 2's metric, not on training health.** Training is complete and
+healthy; the model generates convincing, correctly-conditioned, diverse single-disease CXRs and a working
+both-present composition. The ONLY thing standing between this and "S2 done" is that the single-disease FID
+gate has never been *scored* — it is unchecked, not failed. Recommendation: run the S4 FID watcher over the
+50k–100k checkpoints, select best-by-FID (do NOT default to the last/100k checkpoint — last ≠ best; the
+val-floor and visual evidence point to the 54k or 84k–97k region), confirm that best FID is "convincing"
+(beats step40k and approaches the 0.255 real-real floor), and only then mark S2 done and release composition.
+No failure mode argues for more steps or intervention — the run is healthy and finished.
+
+**Downstream eval gates (logged / not checked — not run here):**
+- N1 both-present rate vs real comorbid + Wilson/Newcombe CIs; H1 = presence within 5pts AND two-sample
+  AUC ≤ 0.60: **NOT CHECKED** (no presence-rate/AUC for hifei736 checkpoints logged to W&B). Note
+  `results/exp5_presence.json` exists on disk (pilot/40k era) — separate from a final-checkpoint N1 run.
+- N2 fidelity (XRV-FID + KID, PoE must beat naive overlay; `results/fid.json` vs `results/overlay_fid.json`):
+  **NOT CHECKED** — neither `results/fid.json` nor `results/overlay_fid.json` is on disk; only the real-real
+  floor `results/fid_floor_xrv.json` exists. The compose grids visually show PoE both-present, but the
+  quantitative PoE-vs-overlay comparison is unrun.
+
+**Catalog modes skipped (malformed/unmeasurable this run):** none malformed. Not-logged → not-checked:
+latent-collapse (no latent PCA), noise-schedule-mismatch, attention-map-collapse, timestep-distribution-skew,
+update-to-weight-ratio, weight-norm-explosion (no per-param norms), loss-scale-anomalous & lr-batch-size-mismatch
+& fid-regression (no baseline/FID logged). AMP scaler not logged (bf16 has no GradScaler) — fp-precision
+checked visually instead.
+
+---
+
 ## EDA/Exp1 Gate — Pair Selection — 2026-06-18
 
 **Gate verdict**: ✅ GO
